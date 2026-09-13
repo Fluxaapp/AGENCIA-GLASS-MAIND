@@ -1,0 +1,55 @@
+.brand-name {
+  display: inline-block;
+  font-size: 0 !important;
+  line-height: 0;
+  vertical-align: middle;
+}
+.brand-name::before {
+  content: "";
+  display: block;
+  width: clamp(190px, 18vw, 280px);
+  aspect-ratio: 1386 / 143;
+  background: url('/brand-wordmark.svg') center / contain no-repeat;
+}
+.brand-name--compact::before {
+  width: clamp(118px, 10vw, 148px);
+}
+.site-header .brand-name::before {
+  filter: invert(1);
+}
+
+.intro__mark svg path,
+.site-header__symbol path,
+.menu-overlay__brand svg path,
+.hero__orbit svg path,
+.manifesto__mark svg path,
+.statement__symbol svg path,
+.footer__brand svg path {
+  opacity: 0 !important;
+}
+
+.intro__mark svg,
+.site-header__symbol,
+.menu-overlay__brand svg,
+.hero__orbit svg,
+.manifesto__mark svg,
+.statement__symbol svg,
+.footer__brand svg {
+  background: url('/brand-symbol.svg') center / contain no-repeat;
+}
+
+.site-header__symbol,
+.hero__orbit svg,
+.statement__symbol svg {
+  filter: invert(1);
+}
+
+.menu-overlay__brand .brand-name::before,
+.footer__brand .brand-name::before {
+  filter: none;
+}
+
+@media (max-width: 900px) {
+  .brand-name--compact::before { width: 116px; }
+  .footer__brand .brand-name::before { width: 180px; }
+}
