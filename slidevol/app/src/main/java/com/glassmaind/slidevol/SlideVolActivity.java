@@ -129,7 +129,13 @@ public class SlideVolActivity extends Activity
             @Override public void onProgressChanged(SeekBar b,int progress,boolean changedByUser){
                 int now=min+progress;
                 valueText.setText(now+suffix);
-                if(changedByUser)prefs.edit().putInt(key,now).apply();
+                if(changedByUser){
+                    SharedPreferences.Editor editor=prefs.edit().putInt(key,now);
+                    if("edgeDistance".equals(key)&&"free".equals(prefs.getString("side","right"))){
+                        editor.putString("side",prefs.getFloat("freeX",.9f)<.5f?"left":"right");
+                    }
+                    editor.apply();
+                }
             }
             @Override public void onStartTrackingTouch(SeekBar b){}
             @Override public void onStopTrackingTouch(SeekBar b){}
@@ -262,7 +268,7 @@ public class SlideVolActivity extends Activity
         else right.setBackground(surface(accent(),12));
         setting(placement,"Posição vertical","vertical",0,100,30,"%");
         setting(placement,"Distância da borda","edgeDistance",0,120,10," dp");
-        note(placement,"A distância da borda se aplica ao modo Esquerda ou Direita. Se você moveu a barra manualmente, selecione uma lateral para utilizar essa distância.");
+        note(placement,"Ao ajustar a distância, o SlideVol fixa a barra na lateral mais próxima, mesmo se ela foi posicionada livremente.");
 
         LinearLayout sound=panel(root,"SILENCIAR TUDO",
             "O botão sob a barra tenta zerar mídia, toque, alarmes, notificações e sons do sistema.");
