@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="finger_accessibility_desc">Permite verificar se o sensor de impressão digital oferece gestos direcionais e, com autorização, usá-los para ajustar o volume de mídia. Não lê conteúdo da tela.</string>
+</resources>
