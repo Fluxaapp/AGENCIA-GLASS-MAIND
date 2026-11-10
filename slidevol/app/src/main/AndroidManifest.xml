@@ -4,26 +4,24 @@
   <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
-  <uses-permission android:name="android.permission.USE_FINGERPRINT"/>
-  <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
-  <application android:label="SlideVol" android:allowBackup="false" android:theme="@android:style/Theme.Material.NoActionBar">
+  <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY"/>
+  <application
+    android:label="SlideVol"
+    android:allowBackup="false"
+    android:theme="@android:style/Theme.Material.NoActionBar">
     <activity android:name=".SlideVolActivity" android:exported="true">
       <intent-filter>
         <action android:name="android.intent.action.MAIN"/>
         <category android:name="android.intent.category.LAUNCHER"/>
       </intent-filter>
     </activity>
-    <service android:name=".SlideVolActivity$VolumeService" android:exported="false" android:foregroundServiceType="specialUse">
-      <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User initiated floating media volume gesture control"/>
-    </service>
-    <service android:name=".SlideVolActivity$FingerprintService"
-      android:label="SlideVol: gestos na digital"
-      android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-      android:exported="true">
-      <intent-filter>
-        <action android:name="android.accessibilityservice.AccessibilityService"/>
-      </intent-filter>
-      <meta-data android:name="android.accessibilityservice" android:resource="@xml/slidevol_accessibility"/>
+    <service
+      android:name=".SlideVolService"
+      android:exported="false"
+      android:foregroundServiceType="specialUse">
+      <property
+        android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+        android:value="User controlled floating volume and silent mode widget"/>
     </service>
   </application>
 </manifest>
