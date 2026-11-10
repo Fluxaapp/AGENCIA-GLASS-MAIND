@@ -140,7 +140,8 @@ public class SlideVolActivity extends Activity {
         root.addView(compact);
         root.addView(label("Desativado: mostra setas e porcentagem, como na versão anterior.",12,SUBTEXT,false));
 
-        addSlider(root,"Transparência","opacity",15,100,64,"%",false);
+        addSlider(root,"Opacidade","opacity",15,100,64,"%",false);
+        root.addView(label("Quanto menor a opacidade, mais transparente fica a barra.",12,SUBTEXT,false));
         addSlider(root,"Largura da barra","width",24,100,34," dp",false);
         addSlider(root,"Altura da barra","height",90,300,150," dp",false);
         addSlider(root,"Sensibilidade do gesto","sensitivity",6,36,14," dp",false);
