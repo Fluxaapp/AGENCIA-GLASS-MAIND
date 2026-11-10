@@ -1,486 +1,409 @@
 package com.glassmaind.slidevol;
 
-import android.accessibilityservice.AccessibilityService;
-import android.accessibilityservice.AccessibilityServiceInfo;
-import android.accessibilityservice.FingerprintGestureController;
 import android.app.Activity;
-import android.app.Notification;
-import android.app.NotificationChannel;
+import android.app.AlertDialog;
 import android.app.NotificationManager;
-import android.app.PendingIntent;
-import android.app.Service;
-import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.graphics.Canvas;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
-import android.graphics.Paint;
-import android.graphics.PixelFormat;
-import android.graphics.RectF;
 import android.graphics.drawable.GradientDrawable;
 import android.media.AudioManager;
-import android.os.Bundle;
-import android.os.Handler;
-import android.os.IBinder;
-import android.os.Looper;
-import android.os.SystemClock;
-import android.provider.Settings;
 import android.net.Uri;
+import android.os.Bundle;
+import android.provider.Settings;
 import android.view.Gravity;
-import android.view.MotionEvent;
 import android.view.View;
-import android.view.WindowManager;
-import android.view.accessibility.AccessibilityEvent;
-import android.view.accessibility.AccessibilityManager;
 import android.widget.Button;
+import android.widget.EditText;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.Switch;
 import android.widget.TextView;
+import android.widget.Toast;
 
-import java.text.DateFormat;
-import java.util.Date;
+import java.util.ArrayList;
 
-public class SlideVolActivity extends Activity {
-    public static final String PREFS = "slidevol_prefs";
-    private static final int BG = Color.rgb(12, 19, 22);
-    private static final int ACCENT = Color.rgb(167, 239, 201);
-    private static final int SUBTEXT = Color.rgb(183, 199, 197);
+public class SlideVolActivity extends Activity
+        implements SharedPreferences.OnSharedPreferenceChangeListener {
+    public static final String PREFS="slidevol_prefs";
+    private static final int BACKGROUND=Color.rgb(10,15,20);
+    private static final int PANEL=Color.rgb(21,29,35);
+    private static final int TEXT=Color.rgb(241,247,245);
+    private static final int MUTED_TEXT=Color.rgb(164,178,179);
+    private static final int[] PALETTE = {
+        Color.rgb(110,215,183), Color.rgb(119,180,245),
+        Color.rgb(185,160,247), Color.rgb(255,255,255),
+        Color.rgb(247,151,129), Color.rgb(238,205,120),
+        Color.rgb(143,232,132)
+    };
     private SharedPreferences prefs;
-    private TextView overlayStatus, fingerprintStatus;
-    private boolean permissionPending = false;
+    private MuteEngine muteEngine;
+    private TextView overlayStatus, dndStatus, muteStatus, colorCaption;
+    private VolumeBarView preview;
+    private LinearLayout swatchRow;
+    private Button muteAction;
+    private final ArrayList<SeekBar> sliders=new ArrayList<>();
+    private boolean permissionPending;
 
-    private int dp(float n) { return (int)(n * getResources().getDisplayMetrics().density + 0.5f); }
-    private GradientDrawable rounded(int color, int radius) {
-        GradientDrawable d = new GradientDrawable();
+    private int dp(float v){return (int)(v*getResources().getDisplayMetrics().density+.5f);}
+    private int accent(){return prefs.getInt("accentColor",PALETTE[0]);}
+
+    private GradientDrawable surface(int color,int round){
+        GradientDrawable d=new GradientDrawable();
         d.setColor(color);
-        d.setCornerRadius(dp(radius));
+        d.setCornerRadius(dp(round));
         return d;
     }
-    private TextView label(String s, int size, int color, boolean bold) {
-        TextView t = new TextView(this);
-        t.setText(s); t.setTextSize(size); t.setTextColor(color);
-        if (bold) t.setTypeface(null, 1);
-        t.setPadding(0, dp(6), 0, dp(6));
-        return t;
+    private TextView text(String value,int size,int color,boolean bold){
+        TextView v=new TextView(this);
+        v.setText(value); v.setTextSize(size); v.setTextColor(color);
+        if(bold)v.setTypeface(android.graphics.Typeface.DEFAULT,1);
+        return v;
     }
-    private void actionButton(LinearLayout box, String text, int color, View.OnClickListener click) {
-        Button button = new Button(this);
-        button.setAllCaps(false);
-        button.setText(text);
-        button.setTextColor(Color.WHITE);
-        button.setTextSize(14);
-        button.setBackground(rounded(color, 13));
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, dp(48));
-        p.topMargin = dp(9);
-        box.addView(button, p);
-        button.setOnClickListener(click);
+    private LinearLayout column(){
+        LinearLayout l=new LinearLayout(this);
+        l.setOrientation(LinearLayout.VERTICAL);
+        return l;
     }
-    private void addSlider(LinearLayout box, String title, String key, int min, int max,
-                           int fallback, String unit, boolean invert) {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        TextView name=label(title,15,Color.WHITE,false);
-        TextView value=label("",14,ACCENT,true);
-        row.addView(name,new LinearLayout.LayoutParams(0,-2,1));
-        row.addView(value);
-        box.addView(row);
+    private LinearLayout panel(LinearLayout root,String heading,String description){
+        LinearLayout p=column();
+        p.setPadding(dp(18),dp(17),dp(18),dp(18));
+        p.setBackground(surface(PANEL,20));
+        LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(-1,-2);
+        params.topMargin=dp(13);
+        root.addView(p,params);
+        TextView label=text(heading,17,TEXT,true);
+        p.addView(label);
+        if(description!=null && !description.isEmpty()){
+            TextView subtitle=text(description,12,MUTED_TEXT,false);
+            LinearLayout.LayoutParams subp=new LinearLayout.LayoutParams(-1,-2);
+            subp.topMargin=dp(7);
+            subp.bottomMargin=dp(12);
+            p.addView(subtitle,subp);
+        }
+        return p;
+    }
+    private void note(LinearLayout card,String copy){
+        TextView t=text(copy,12,MUTED_TEXT,false);
+        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);
+        p.topMargin=dp(7);
+        card.addView(t,p);
+    }
+    private void action(LinearLayout card,String label,boolean primary,View.OnClickListener listener){
+        Button b=new Button(this);
+        b.setAllCaps(false);
+        b.setText(label);
+        b.setTextSize(14);
+        b.setTextColor(primary ? BACKGROUND : TEXT);
+        b.setBackground(surface(primary ? accent():Color.rgb(47,59,65),13));
+        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(48));
+        p.topMargin=dp(10);
+        card.addView(b,p);
+        b.setOnClickListener(listener);
+    }
+    private void setting(LinearLayout card,String title,String key,
+        int min,int max,int initial,String suffix) {
+        LinearLayout line=new LinearLayout(this);
+        line.setOrientation(LinearLayout.HORIZONTAL);
+        TextView titleText=text(title,14,TEXT,false);
+        TextView valueText=text("",13,accent(),true);
+        line.addView(titleText,new LinearLayout.LayoutParams(0,-2,1));
+        line.addView(valueText);
+        LinearLayout.LayoutParams lineParam=new LinearLayout.LayoutParams(-1,-2);
+        lineParam.topMargin=dp(16);
+        card.addView(line,lineParam);
         SeekBar seek=new SeekBar(this);
         seek.setMax(max-min);
-        int start=prefs.getInt(key,fallback);
-        seek.setProgress(Math.max(0,Math.min(max-min,start-min)));
-        value.setText(start+unit);
-        box.addView(seek);
+        seek.setProgress(Math.max(0,Math.min(max-min,prefs.getInt(key,initial)-min)));
+        seek.setProgressTintList(ColorStateList.valueOf(accent()));
+        seek.setThumbTintList(ColorStateList.valueOf(accent()));
+        int init=min+seek.getProgress();
+        valueText.setText(init+suffix);
+        card.addView(seek);
+        sliders.add(seek);
         seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
-            @Override public void onProgressChanged(SeekBar b,int progress, boolean fromUser){
-                int n=min+progress; value.setText(n+unit);
-                if(fromUser) prefs.edit().putInt(key,n).apply();
+            @Override public void onProgressChanged(SeekBar b,int progress,boolean changedByUser){
+                int now=min+progress;
+                valueText.setText(now+suffix);
+                if(changedByUser)prefs.edit().putInt(key,now).apply();
             }
             @Override public void onStartTrackingTouch(SeekBar b){}
             @Override public void onStopTrackingTouch(SeekBar b){}
         });
     }
-    private void section(LinearLayout root, String title) {
-        TextView head=label(title,17,ACCENT,true);
-        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);
-        p.topMargin=dp(18);
-        root.addView(head,p);
+    private void toggle(LinearLayout card,String name,String setting,boolean fallback){
+        Switch s=new Switch(this);
+        s.setText(name);
+        s.setTextColor(TEXT);
+        s.setTextSize(14);
+        s.setPadding(0,dp(10),0,dp(8));
+        s.setChecked(prefs.getBoolean(setting,fallback));
+        s.setThumbTintList(new ColorStateList(
+            new int[][]{new int[]{android.R.attr.state_checked},new int[]{}},
+            new int[]{accent(),Color.rgb(152,162,164)}));
+        card.addView(s);
+        s.setOnCheckedChangeListener((button,enabled)->
+            prefs.edit().putBoolean(setting,enabled).apply());
     }
 
-    @Override public void onCreate(Bundle state) {
+    @Override public void onCreate(Bundle state){
         super.onCreate(state);
         prefs=getSharedPreferences(PREFS,MODE_PRIVATE);
-        getWindow().setStatusBarColor(BG);
-        getWindow().setNavigationBarColor(BG);
+        muteEngine=new MuteEngine(this);
+        getWindow().setStatusBarColor(BACKGROUND);
+        getWindow().setNavigationBarColor(BACKGROUND);
+
         ScrollView scroll=new ScrollView(this);
         scroll.setFillViewport(true);
-        scroll.setBackgroundColor(BG);
-        LinearLayout root=new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(22),dp(30),dp(22),dp(36));
+        scroll.setBackgroundColor(BACKGROUND);
+        LinearLayout root=column();
+        root.setPadding(dp(20),dp(26),dp(20),dp(45));
         scroll.addView(root);
-        root.addView(label("SlideVol",32,ACCENT,true));
-        root.addView(label("Controle flutuante por gestos",16,Color.WHITE,false));
-        root.addView(label("Arraste diretamente sobre a barra para mudar o volume. Segure por 0,7 segundo sem mover para reposicioná-la.",13,SUBTEXT,false));
 
-        section(root,"Controle");
-        overlayStatus=label("",13,ACCENT,false);
-        root.addView(overlayStatus);
-        actionButton(root,"Ativar barra flutuante",Color.rgb(25,108,82),v->startOverlay());
-        actionButton(root,"Desativar barra",Color.rgb(51,61,64),v->stopService(new Intent(this,VolumeService.class)));
+        TextView eyeline=text("SLIDEVOL  /  1.2",12,accent(),true);
+        root.addView(eyeline);
+        TextView headline=text("Seu volume.\nSeu controle.",31,TEXT,true);
+        LinearLayout.LayoutParams hp=new LinearLayout.LayoutParams(-1,-2);
+        hp.topMargin=dp(10);
+        root.addView(headline,hp);
+        TextView lead=text("Arraste na lateral do celular para ajustar o volume. Personalize cada detalhe do controle.",14,MUTED_TEXT,false);
+        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);
+        lp.topMargin=dp(7);
+        root.addView(lead,lp);
 
-        section(root,"Aparência");
-        Switch compact=new Switch(this);
-        compact.setText("Barra discreta, estilo nativo");
-        compact.setTextColor(Color.WHITE);
-        compact.setTextSize(15);
-        compact.setChecked(prefs.getBoolean("compact",true));
-        compact.setOnCheckedChangeListener((b,checked)->prefs.edit().putBoolean("compact",checked).apply());
-        root.addView(compact);
-        root.addView(label("Desativado: mostra setas e porcentagem, como na versão anterior.",12,SUBTEXT,false));
+        LinearLayout viewCard=panel(root,"PRÉVIA","O controle acompanha sua cor e as dimensões escolhidas.");
+        LinearLayout center=new LinearLayout(this);
+        center.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams centerParams=new LinearLayout.LayoutParams(-1,dp(190));
+        viewCard.addView(center,centerParams);
+        preview=new VolumeBarView(this,prefs,(AudioManager)getSystemService(AUDIO_SERVICE));
+        preview.setDemoMode();
+        LinearLayout.LayoutParams prevParams=new LinearLayout.LayoutParams(
+            dp(Math.min(70,prefs.getInt("width",30))),dp(155));
+        center.addView(preview,prevParams);
 
-        addSlider(root,"Opacidade","opacity",15,100,64,"%",false);
-        root.addView(label("Quanto menor a opacidade, mais transparente fica a barra.",12,SUBTEXT,false));
-        addSlider(root,"Largura da barra","width",24,100,34," dp",false);
-        addSlider(root,"Altura da barra","height",90,300,150," dp",false);
-        addSlider(root,"Sensibilidade do gesto","sensitivity",6,36,14," dp",false);
-
-        section(root,"Posição na tela");
-        LinearLayout sides=new LinearLayout(this);
-        sides.setOrientation(LinearLayout.HORIZONTAL);
-        Button right=new Button(this),left=new Button(this);
-        right.setText("Direita");right.setAllCaps(false);
-        left.setText("Esquerda");left.setAllCaps(false);
-        right.setTextColor(Color.WHITE);left.setTextColor(Color.WHITE);
-        right.setBackground(rounded(Color.rgb(25,108,82),10));
-        left.setBackground(rounded(Color.rgb(51,61,64),10));
-        LinearLayout.LayoutParams a=new LinearLayout.LayoutParams(0,dp(45),1);
-        a.rightMargin=dp(6);
-        sides.addView(right,a);
-        LinearLayout.LayoutParams b=new LinearLayout.LayoutParams(0,dp(45),1);
-        b.leftMargin=dp(6);
-        sides.addView(left,b);
-        root.addView(sides);
-        right.setOnClickListener(v->{
-            prefs.edit().putString("side","right").apply();
-            right.setBackground(rounded(Color.rgb(25,108,82),10));
-            left.setBackground(rounded(Color.rgb(51,61,64),10));
+        LinearLayout control=panel(root,"ATIVAÇÃO","Mantenha a barra disponível sobre os aplicativos.");
+        overlayStatus=text("",13,accent(),false);
+        control.addView(overlayStatus);
+        action(control,"Ativar controle flutuante",true,v->enableOverlay());
+        action(control,"Desativar controle",false,v->{
+            stopService(new Intent(this,SlideVolService.class));
+            Toast.makeText(this,"Barra desativada",Toast.LENGTH_SHORT).show();
+            updateStatuses();
         });
+
+        LinearLayout appearance=panel(root,"COR & ESTILO",
+            "Escolha uma cor ou digite qualquer código hexadecimal.");
+        colorCaption=text("",13,accent(),true);
+        appearance.addView(colorCaption);
+        HorizontalScrollView horizontal=new HorizontalScrollView(this);
+        horizontal.setHorizontalScrollBarEnabled(false);
+        swatchRow=new LinearLayout(this);
+        swatchRow.setOrientation(LinearLayout.HORIZONTAL);
+        swatchRow.setPadding(0,dp(12),0,dp(8));
+        horizontal.addView(swatchRow);
+        appearance.addView(horizontal);
+        populateSwatches();
+        action(appearance,"Usar cor personalizada (#HEX)",false,v->promptColor());
+        toggle(appearance,"Mostrar botão de silenciar", "showMute",true);
+        setting(appearance,"Largura da barra","width",24,90,30," dp");
+        setting(appearance,"Altura da barra","height",90,300,162," dp");
+
+        LinearLayout behavior=panel(root,"TRANSPARÊNCIA & GESTOS",
+            "O controle aparece ao deslizar e volta a ficar discreto após o movimento.");
+        setting(behavior,"Opacidade durante o uso","activeOpacity",20,100,94,"%");
+        setting(behavior,"Opacidade em repouso","idleOpacity",0,100,6,"%");
+        setting(behavior,"Retorno à transparência","fadeDelay",0,10,2," s");
+        setting(behavior,"Sensibilidade ao deslizar","sensitivity",5,35,14," dp");
+        note(behavior,"0% em repouso torna a barra totalmente invisível. Mesmo assim, a faixa sensível continua capturando toques nessa pequena área.");
+        note(behavior,"Um toque simples não modifica o volume. Para não bloquear outros botões, use uma barra estreita e coloque-a na borda.");
+
+        LinearLayout placement=panel(root,"POSIÇÃO","Escolha a lateral ou segure por 0,7 s para arrastar livremente.");
+        LinearLayout sideRow=new LinearLayout(this);
+        Button left=new Button(this),right=new Button(this);
+        left.setText("Esquerda");right.setText("Direita");
+        left.setAllCaps(false);right.setAllCaps(false);
+        left.setTextColor(TEXT);right.setTextColor(TEXT);
+        left.setBackground(surface(Color.rgb(40,57,64),12));
+        right.setBackground(surface(Color.rgb(40,57,64),12));
+        LinearLayout.LayoutParams leftP=new LinearLayout.LayoutParams(0,dp(45),1);
+        leftP.rightMargin=dp(5);
+        LinearLayout.LayoutParams rightP=new LinearLayout.LayoutParams(0,dp(45),1);
+        rightP.leftMargin=dp(5);
+        sideRow.addView(left,leftP);sideRow.addView(right,rightP);
+        placement.addView(sideRow);
         left.setOnClickListener(v->{
             prefs.edit().putString("side","left").apply();
-            left.setBackground(rounded(Color.rgb(25,108,82),10));
-            right.setBackground(rounded(Color.rgb(51,61,64),10));
+            left.setBackground(surface(accent(),12));right.setBackground(surface(Color.rgb(40,57,64),12));
         });
-        if("left".equals(prefs.getString("side","right"))){
-            left.setBackground(rounded(Color.rgb(25,108,82),10));
-            right.setBackground(rounded(Color.rgb(51,61,64),10));
-        }
-        addSlider(root,"Altura na tela","vertical",0,100,28,"%",false);
-        actionButton(root,"Restaurar aparência padrão",Color.rgb(51,61,64),v->{
-            prefs.edit().putBoolean("compact",true).putInt("opacity",64).putInt("width",34)
-                .putInt("height",150).putInt("sensitivity",14).putString("side","right")
-                .putInt("vertical",28).apply();
-            recreate();
+        right.setOnClickListener(v->{
+            prefs.edit().putString("side","right").apply();
+            right.setBackground(surface(accent(),12));left.setBackground(surface(Color.rgb(40,57,64),12));
         });
+        if("left".equals(prefs.getString("side","right")))left.setBackground(surface(accent(),12));
+        else right.setBackground(surface(accent(),12));
+        setting(placement,"Posição vertical","vertical",0,100,30,"%");
 
-        section(root,"Leitor de digitais — experimental");
-        root.addView(label("Só funcionará se a Xiaomi disponibilizar os gestos do sensor ao Android. Esta opção não lê sua digital e não exige root.",13,SUBTEXT,false));
-        Switch finger=new Switch(this);
-        finger.setText("Controlar volume com a digital");
-        finger.setTextSize(15);
-        finger.setTextColor(Color.WHITE);
-        finger.setChecked(prefs.getBoolean("fingerEnabled",false));
-        finger.setOnCheckedChangeListener((v,checked)->prefs.edit().putBoolean("fingerEnabled",checked).apply());
-        root.addView(finger);
-        fingerprintStatus=label("",13,ACCENT,false);
-        root.addView(fingerprintStatus);
-        actionButton(root,"Configurar serviço de acessibilidade",Color.rgb(42,69,75),
-            v->startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
-        actionButton(root,"Atualizar diagnóstico do sensor",Color.rgb(51,61,64),v->updateStatus());
-        root.addView(label("Se os gestos forem suportados: deslizar para cima = +1 nível; deslizar para baixo = -1 nível. A captura é feita por um serviço de acessibilidade restrito aos gestos da digital.",12,SUBTEXT,false));
+        LinearLayout sound=panel(root,"SILENCIAR TUDO",
+            "O botão sob a barra tenta zerar mídia, toque, alarmes, notificações e sons do sistema.");
+        muteStatus=text("",13,accent(),true);
+        sound.addView(muteStatus);
+        muteAction=new Button(this);
+        muteAction.setAllCaps(false);
+        muteAction.setTextColor(BACKGROUND);
+        muteAction.setBackground(surface(accent(),12));
+        LinearLayout.LayoutParams muteLp=new LinearLayout.LayoutParams(-1,dp(48));
+        muteLp.topMargin=dp(10);
+        sound.addView(muteAction,muteLp);
+        muteAction.setOnClickListener(v->{
+            muteEngine.toggle();
+            updateStatuses();
+        });
+        dndStatus=text("",12,MUTED_TEXT,false);
+        LinearLayout.LayoutParams statusP=new LinearLayout.LayoutParams(-1,-2);
+        statusP.topMargin=dp(12);
+        sound.addView(dndStatus,statusP);
+        action(sound,"Autorizar Não Perturbe (opcional)",false,v->
+            startActivity(new Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)));
+        note(sound,"Atenção: essa função também pode silenciar despertadores. Durante chamadas em andamento ou com aplicativos que ignoram o volume do Android, o silêncio absoluto não é garantido.");
+
+        LinearLayout reset=panel(root,"RESTAURAR","Voltar às cores, dimensões e efeitos padrão.");
+        action(reset,"Restaurar personalização",false,v->resetAppearance());
+        note(reset,"Sem anúncios, assinaturas ou conexão com a internet.");
 
         setContentView(scroll);
-        updateStatus();
+        updateStatuses();
     }
-    private boolean accessibilityEnabled() {
-        AccessibilityManager am=(AccessibilityManager)getSystemService(ACCESSIBILITY_SERVICE);
-        for(AccessibilityServiceInfo s:am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)){
-            String id=s.getId();
-            if(id!=null && id.contains(getPackageName()) && id.contains("FingerprintService")) return true;
+    private void populateSwatches(){
+        if(swatchRow==null)return;
+        swatchRow.removeAllViews();
+        int chosen=accent();
+        for(int c:PALETTE){
+            View v=new View(this);
+            GradientDrawable circle=new GradientDrawable();
+            circle.setShape(GradientDrawable.OVAL);
+            circle.setColor(c);
+            circle.setStroke(dp(c==chosen?3:1),
+                c==chosen?Color.rgb(15,21,27):Color.rgb(64,78,83));
+            v.setBackground(circle);
+            LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(dp(37),dp(37));
+            p.rightMargin=dp(9);
+            swatchRow.addView(v,p);
+            v.setOnClickListener(view->prefs.edit().putInt("accentColor",c).apply());
         }
-        return false;
-    }
-    private void updateStatus(){
-        if(overlayStatus!=null) overlayStatus.setText(Settings.canDrawOverlays(this)
-            ? "Permissão de sobreposição: autorizada" : "Permissão de sobreposição: pendente");
-        if(fingerprintStatus!=null){
-            boolean active=accessibilityEnabled();
-            boolean available=prefs.getBoolean("fingerAvailable",false);
-            long last=prefs.getLong("fingerLast",0);
-            String state=active ? (available ? "Sensor: gestos disponíveis pelo Android." :
-                "Sensor: detecção indisponível ou não suportada.") :
-                "Serviço de acessibilidade ainda não ativado.";
-            if(last>0) state+="\nÚltimo gesto capturado: "+
-                DateFormat.getDateTimeInstance(DateFormat.SHORT,DateFormat.SHORT)
-                   .format(new Date(last));
-            fingerprintStatus.setText(state);
+        if(colorCaption!=null){
+            colorCaption.setText(String.format(java.util.Locale.US,
+                "COR ATIVA  #%06X", chosen & 0xffffff));
+            colorCaption.setTextColor(chosen);
         }
     }
-    private void startOverlay(){
+    private void promptColor(){
+        EditText input=new EditText(this);
+        input.setSingleLine(true);
+        input.setText(String.format(java.util.Locale.US,"#%06X",accent()&0xffffff));
+        input.setSelectAllOnFocus(true);
+        LinearLayout container=column();
+        container.setPadding(dp(22),dp(6),dp(22),0);
+        container.addView(input);
+        new AlertDialog.Builder(this).setTitle("Cor personalizada")
+            .setMessage("Digite um código RGB, como #3F7FFF.")
+            .setView(container)
+            .setNegativeButton("Cancelar",null)
+            .setPositiveButton("Aplicar",(dialog,which)->{
+                try {
+                    String raw=input.getText().toString().trim();
+                    if(!raw.matches("#[0-9a-fA-F]{6}")) throw new IllegalArgumentException();
+                    prefs.edit().putInt("accentColor",Color.parseColor(raw)).apply();
+                }catch(Exception e){
+                    Toast.makeText(this,"Use um código válido: #RRGGBB",Toast.LENGTH_LONG).show();
+                }
+            }).show();
+    }
+    private void resetAppearance(){
+        prefs.edit()
+            .putInt("accentColor",PALETTE[0])
+            .putInt("width",30)
+            .putInt("height",162)
+            .putInt("activeOpacity",94)
+            .putInt("idleOpacity",6)
+            .putInt("fadeDelay",2)
+            .putInt("sensitivity",14)
+            .putInt("vertical",30)
+            .putString("side","right")
+            .putBoolean("showMute",true).apply();
+        recreate();
+    }
+    private void enableOverlay(){
         if(!Settings.canDrawOverlays(this)){
             permissionPending=true;
-            try{
+            try {
                 startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                     Uri.parse("package:"+getPackageName())));
-            }catch(Exception e){startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION));}
+            } catch(Exception e){
+                startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION));
+            }
             return;
         }
         permissionPending=false;
-        try{startForegroundService(new Intent(this,VolumeService.class));}
-        catch(Exception e){ if(overlayStatus!=null) overlayStatus.setText("Erro ao ativar: "+e.getMessage());}
+        try {
+            startForegroundService(new Intent(this,SlideVolService.class));
+            Toast.makeText(this,"Controle SlideVol ativado",Toast.LENGTH_SHORT).show();
+        }catch(Exception ex){
+            Toast.makeText(this,"Não foi possível ativar: "+ex.getMessage(),Toast.LENGTH_LONG).show();
+        }
+    }
+    private void updateStatuses(){
+        if(overlayStatus!=null){
+            overlayStatus.setText(Settings.canDrawOverlays(this)
+                ? "Permissão para flutuar: autorizada"
+                : "Permissão para flutuar: pendente");
+        }
+        if(muteStatus!=null){
+            muteStatus.setText(muteEngine.isMuted() ?
+                "Estado atual: silenciamento ativado" :
+                "Estado atual: volume normal");
+        }
+        if(muteAction!=null){
+            muteAction.setText(muteEngine.isMuted() ?
+                "Restaurar todos os volumes" :
+                "Silenciar agora");
+        }
+        if(dndStatus!=null){
+            NotificationManager nm=(NotificationManager)getSystemService(NOTIFICATION_SERVICE);
+            dndStatus.setText(nm!=null && nm.isNotificationPolicyAccessGranted() ?
+                "Permissão Não Perturbe: autorizada" :
+                "Permissão Não Perturbe: não autorizada. Alguns alertas podem permanecer audíveis.");
+        }
     }
     @Override protected void onResume(){
         super.onResume();
-        if(permissionPending && Settings.canDrawOverlays(this)) startOverlay();
-        updateStatus();
+        prefs.registerOnSharedPreferenceChangeListener(this);
+        if(permissionPending && Settings.canDrawOverlays(this))enableOverlay();
+        updateStatuses();
     }
-
-    public static class VolumeService extends Service implements SharedPreferences.OnSharedPreferenceChangeListener {
-        private WindowManager wm;
-        private WindowManager.LayoutParams params;
-        private VolumeView overlay;
-        private SharedPreferences prefs;
-        private AudioManager audio;
-        private Handler handler;
-        private int screenWidth,screenHeight;
-        private boolean touched, moved, reposition;
-        private float initialX,initialY;
-        private int startVol,originX,originY;
-        private Runnable longPress;
-        private int dp(float n){return (int)(n*getResources().getDisplayMetrics().density+0.5f);}
-        @Override public void onCreate(){
-            super.onCreate();
-            wm=(WindowManager)getSystemService(WINDOW_SERVICE);
-            audio=(AudioManager)getSystemService(AUDIO_SERVICE);
-            prefs=getSharedPreferences(PREFS,MODE_PRIVATE);
-            prefs.registerOnSharedPreferenceChangeListener(this);
-            handler=new Handler(Looper.getMainLooper());
-            android.util.DisplayMetrics dm=new android.util.DisplayMetrics();
-            wm.getDefaultDisplay().getRealMetrics(dm);
-            screenWidth=dm.widthPixels;screenHeight=dm.heightPixels;
-            ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).createNotificationChannel(
-                new NotificationChannel("slidevol","SlideVol",NotificationManager.IMPORTANCE_LOW));
-        }
-        @Override public int onStartCommand(Intent intent,int flags,int startId){
-            if(intent!=null && "STOP".equals(intent.getAction())){
-                stopSelf();return START_NOT_STICKY;
-            }
-            if(!Settings.canDrawOverlays(this)){
-                stopSelf();return START_NOT_STICKY;
-            }
-            PendingIntent open=PendingIntent.getActivity(this,1,new Intent(this,SlideVolActivity.class),
-                PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
-            PendingIntent stop=PendingIntent.getService(this,2,
-                new Intent(this,VolumeService.class).setAction("STOP"),
-                PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
-            Notification n=new Notification.Builder(this,"slidevol")
-                .setSmallIcon(android.R.drawable.ic_lock_silent_mode_off)
-                .setContentTitle("SlideVol ativo")
-                .setContentText("Controle flutuante de volume por gestos")
-                .setContentIntent(open).setOngoing(true)
-                .addAction(new Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel,
-                    "Desativar",stop).build()).build();
-            startForeground(24,n);
-            if(overlay==null) showOverlay();
-            return START_STICKY;
-        }
-        private void calculatePosition(){
-            int w=params.width,h=params.height;
-            int limitY=Math.max(0,screenHeight-h-dp(20));
-            String side=prefs.getString("side","right");
-            if("free".equals(side)){
-                params.x=Math.round(prefs.getFloat("freeX",.75f)*Math.max(0,screenWidth-w));
-                params.y=Math.round(prefs.getFloat("freeY",.28f)*limitY);
-            }else{
-                params.x="left".equals(side)?dp(5):Math.max(0,screenWidth-w-dp(6));
-                params.y=Math.round(prefs.getInt("vertical",28)/100f*limitY);
-            }
-        }
-        private void showOverlay(){
-            overlay=new VolumeView(this,prefs,audio);
-            params=new WindowManager.LayoutParams(dp(prefs.getInt("width",34)),
-                dp(prefs.getInt("height",150)),WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,PixelFormat.TRANSLUCENT);
-            params.gravity=Gravity.TOP|Gravity.LEFT;
-            calculatePosition();
-            overlay.setOnTouchListener((v,event)->handleTouch(event));
-            try{wm.addView(overlay,params);}
-            catch(Exception e){overlay=null;stopSelf();}
-        }
-        private boolean handleTouch(MotionEvent e){
-            if(overlay==null)return false;
-            float x=e.getRawX(),y=e.getRawY();
-            switch(e.getActionMasked()){
-                case MotionEvent.ACTION_DOWN:
-                    touched=true;moved=false;reposition=false;
-                    initialX=x;initialY=y;originX=params.x;originY=params.y;
-                    startVol=audio.getStreamVolume(AudioManager.STREAM_MUSIC);
-                    longPress=()->{if(touched && !moved)reposition=true;};
-                    handler.postDelayed(longPress,700);
-                    return true;
-                case MotionEvent.ACTION_MOVE:
-                    float dx=x-initialX,dy=y-initialY;
-                    if(!moved && (Math.abs(dx)>dp(5)||Math.abs(dy)>dp(5))){
-                        moved=true;
-                        handler.removeCallbacks(longPress);
-                    }
-                    if(reposition){
-                        params.x=Math.max(0,Math.min(screenWidth-params.width,originX+Math.round(dx)));
-                        params.y=Math.max(0,Math.min(screenHeight-params.height,originY+Math.round(dy)));
-                        try{wm.updateViewLayout(overlay,params);}catch(Exception ignored){}
-                    }else{
-                        int sensitivity=prefs.getInt("sensitivity",14);
-                        int max=audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
-                        int next=Math.max(0,Math.min(max,startVol-Math.round(dy/(float)dp(sensitivity))));
-                        if(next!=audio.getStreamVolume(AudioManager.STREAM_MUSIC))
-                            audio.setStreamVolume(AudioManager.STREAM_MUSIC,next,0);
-                        overlay.invalidate();
-                    }
-                    return true;
-                case MotionEvent.ACTION_UP:
-                case MotionEvent.ACTION_CANCEL:
-                    touched=false;
-                    if(longPress!=null) handler.removeCallbacks(longPress);
-                    if(reposition){
-                        prefs.edit().putString("side","free")
-                            .putFloat("freeX",params.x/(float)Math.max(1,screenWidth-params.width))
-                            .putFloat("freeY",params.y/(float)Math.max(1,screenHeight-params.height-dp(20)))
-                            .apply();
-                    }
-                    overlay.invalidate();return true;
-                default:return true;
-            }
-        }
-        @Override public void onSharedPreferenceChanged(SharedPreferences s,String key){
-            if(overlay==null||params==null)return;
-            if("opacity".equals(key)||"compact".equals(key)){
-                overlay.invalidate();return;
-            }
-            if("width".equals(key)||"height".equals(key)||"side".equals(key)||
-                    "vertical".equals(key)||"freeX".equals(key)||"freeY".equals(key)){
-                params.width=dp(prefs.getInt("width",34));
-                params.height=dp(prefs.getInt("height",150));
-                calculatePosition();
-                try{wm.updateViewLayout(overlay,params);}catch(Exception ignored){}
-                overlay.invalidate();
-            }
-        }
-        @Override public void onDestroy(){
-            prefs.unregisterOnSharedPreferenceChangeListener(this);
-            if(longPress!=null)handler.removeCallbacks(longPress);
-            if(overlay!=null){
-                try{wm.removeView(overlay);}catch(Exception ignored){}
-                overlay=null;
-            }
-            super.onDestroy();
-        }
-        @Override public IBinder onBind(Intent i){return null;}
+    @Override protected void onPause(){
+        prefs.unregisterOnSharedPreferenceChangeListener(this);
+        super.onPause();
     }
-
-    public static class VolumeView extends View {
-        private final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final RectF rect=new RectF();
-        private final SharedPreferences prefs;
-        private final AudioManager audio;
-        private final float density;
-        VolumeView(Context ctx, SharedPreferences pref, AudioManager manager){
-            super(ctx);prefs=pref;audio=manager;
-            density=getResources().getDisplayMetrics().density;
-            setLayerType(View.LAYER_TYPE_SOFTWARE,null);
+    @Override public void onSharedPreferenceChanged(SharedPreferences shared,String key){
+        if(preview!=null){
+            LinearLayout.LayoutParams lp=(LinearLayout.LayoutParams)preview.getLayoutParams();
+            if(lp!=null && ("width".equals(key)||"height".equals(key))){
+                lp.width=dp(Math.min(70,prefs.getInt("width",30)));
+                preview.setLayoutParams(lp);
+            }
+            preview.invalidate();
         }
-        private float dp(float d){return d*density;}
-        @Override protected void onDraw(Canvas canvas){
-            super.onDraw(canvas);
-            float w=getWidth(),h=getHeight(),cx=w/2f;
-            int transparency=Math.max(15,Math.min(100,prefs.getInt("opacity",64)));
-            int alpha=Math.round(255f*transparency/100f);
-            float corner=Math.min(w/2f,dp(22));
-            p.setStyle(Paint.Style.FILL);
-            p.setColor(Color.argb(alpha,12,24,28));
-            rect.set(0,0,w,h);
-            canvas.drawRoundRect(rect,corner,corner,p);
-            p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(dp(1));
-            p.setColor(Color.argb(Math.min(255,alpha+20),115,171,148));
-            canvas.drawRoundRect(rect,corner,corner,p);
-            p.setStyle(Paint.Style.FILL);
-            int level=audio.getStreamVolume(AudioManager.STREAM_MUSIC);
-            int max=audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
-            float ratio=max==0?0f:level/(float)max;
-            if(prefs.getBoolean("compact",true)){
-                float trackW=Math.min(dp(7),w*.32f);
-                float top=dp(16),bottom=h-dp(16);
-                if(bottom<top+dp(4)){top=dp(5);bottom=h-dp(5);}
-                rect.set(cx-trackW/2f,top,cx+trackW/2f,bottom);
-                p.setColor(Color.argb(Math.min(245,alpha+60),155,175,170));
-                canvas.drawRoundRect(rect,trackW/2f,trackW/2f,p);
-                float filled=Math.max(0,(bottom-top)*ratio);
-                if(filled>0){
-                    rect.set(cx-trackW/2f,bottom-filled,cx+trackW/2f,bottom);
-                    p.setColor(Color.rgb(167,239,201));
-                    canvas.drawRoundRect(rect,trackW/2f,trackW/2f,p);
-                }
-            }else{
-                float text=Math.min(dp(18),w*.36f);
-                p.setTextAlign(Paint.Align.CENTER);
-                p.setColor(Color.rgb(167,239,201));
-                p.setTextSize(text);
-                canvas.drawText("\u25b2",cx,h*.25f,p);
-                p.setTextSize(Math.min(dp(18),w*.29f));
-                canvas.drawText(Math.round(ratio*100)+"%",cx,h*.52f,p);
-                p.setTextSize(text);
-                canvas.drawText("\u25bc",cx,h*.83f,p);
+        if("accentColor".equals(key)){
+            populateSwatches();
+            for(SeekBar s:sliders){
+                s.setProgressTintList(ColorStateList.valueOf(accent()));
+                s.setThumbTintList(ColorStateList.valueOf(accent()));
             }
         }
-    }
-
-    public static class FingerprintService extends AccessibilityService {
-        private FingerprintGestureController controller;
-        private FingerprintGestureController.FingerprintGestureCallback callback;
-        private SharedPreferences prefs;
-        private AudioManager audio;
-        @Override protected void onServiceConnected(){
-            super.onServiceConnected();
-            prefs=getSharedPreferences(PREFS,MODE_PRIVATE);
-            audio=(AudioManager)getSystemService(AUDIO_SERVICE);
-            controller=getFingerprintGestureController();
-            if(controller==null)return;
-            prefs.edit().putBoolean("fingerAvailable",controller.isGestureDetectionAvailable()).apply();
-            callback=new FingerprintGestureController.FingerprintGestureCallback(){
-                @Override public void onGestureDetectionAvailabilityChanged(boolean available){
-                    prefs.edit().putBoolean("fingerAvailable",available).apply();
-                }
-                @Override public void onGestureDetected(int gesture){
-                    if(!prefs.getBoolean("fingerEnabled",false))return;
-                    int direction;
-                    if(gesture==FingerprintGestureController.FINGERPRINT_GESTURE_SWIPE_UP)
-                        direction=AudioManager.ADJUST_RAISE;
-                    else if(gesture==FingerprintGestureController.FINGERPRINT_GESTURE_SWIPE_DOWN)
-                        direction=AudioManager.ADJUST_LOWER;
-                    else return;
-                    audio.adjustStreamVolume(AudioManager.STREAM_MUSIC,direction,0);
-                    prefs.edit().putLong("fingerLast",System.currentTimeMillis()).apply();
-                }
-            };
-            controller.registerFingerprintGestureCallback(callback,null);
-        }
-        @Override public void onAccessibilityEvent(AccessibilityEvent event){}
-        @Override public void onInterrupt(){}
-        @Override public void onDestroy(){
-            if(controller!=null&&callback!=null)
-                controller.unregisterFingerprintGestureCallback(callback);
-            if(prefs!=null)prefs.edit().putBoolean("fingerAvailable",false).apply();
-            super.onDestroy();
-        }
+        if("allMuted".equals(key))updateStatuses();
     }
 }
