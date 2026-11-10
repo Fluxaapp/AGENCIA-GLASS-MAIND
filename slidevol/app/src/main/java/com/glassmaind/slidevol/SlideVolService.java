@@ -31,6 +31,7 @@ public class SlideVolService extends Service implements SharedPreferences.OnShar
     private Handler mainHandler;
     private Runnable holdTask, fadeTask;
     private int displayW, displayH, startVolume, initialWindowX, initialWindowY;
+    private float startFraction;
     private float downX, downY;
     private boolean touching, moved, movingWindow, swiping;
 
@@ -108,7 +109,9 @@ public class SlideVolService extends Service implements SharedPreferences.OnShar
     }
 
     private int maxVertical() {
-        int extra=prefs.getBoolean("showMute",true)?dp(56):dp(14);
+        int extra = prefs.getBoolean("showMute",true)
+            ? dp(prefs.getInt("muteSize",38)+prefs.getInt("muteSpacing",9)+14)
+            : dp(14);
         return Math.max(0,displayH-barParams.height-extra);
     }
     private void computePosition() {
@@ -119,7 +122,10 @@ public class SlideVolService extends Service implements SharedPreferences.OnShar
             barParams.y=Math.max(0,Math.min(maxVertical(),
                 Math.round(prefs.getFloat("freeY",.34f)*maxVertical())));
         } else {
-            barParams.x="left".equals(side) ? dp(6) : Math.max(0,displayW-barParams.width-dp(7));
+            int margin = dp(Math.max(0,Math.min(120,prefs.getInt("edgeDistance",10))));
+            barParams.x="left".equals(side)
+                ? Math.max(0,Math.min(maxX,margin))
+                : Math.max(0,maxX-margin);
             barParams.y=Math.round(Math.max(0,Math.min(100,prefs.getInt("vertical",30)))/100f * maxVertical());
         }
     }
@@ -128,7 +134,8 @@ public class SlideVolService extends Service implements SharedPreferences.OnShar
         muteParams.x=Math.max(0,Math.min(displayW-muteParams.width,
             barParams.x+(barParams.width-muteParams.width)/2));
         muteParams.y=Math.max(0,Math.min(displayH-muteParams.height-dp(5),
-            barParams.y+barParams.height+dp(9)));
+            barParams.y+barParams.height+
+                dp(Math.max(0,Math.min(75,prefs.getInt("muteSpacing",9))))));
     }
     private void syncMuteButton() {
         if(bar==null) return;
@@ -141,7 +148,7 @@ public class SlideVolService extends Service implements SharedPreferences.OnShar
         }
         if(muteButton==null) {
             muteButton=new MuteButtonView(this,prefs,muteEngine);
-            int size=dp(38);
+            int size=dp(Math.max(28,Math.min(76,prefs.getInt("muteSize",38))));
             muteParams=new WindowManager.LayoutParams(size,size,
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|
@@ -154,6 +161,9 @@ public class SlideVolService extends Service implements SharedPreferences.OnShar
             try {window.addView(muteButton,muteParams);}
             catch(Exception ignored){muteButton=null;muteParams=null;}
         } else {
+            int size=dp(Math.max(28,Math.min(76,prefs.getInt("muteSize",38))));
+            muteParams.width=size;
+            muteParams.height=size;
             positionMuteButton();
             try{window.updateViewLayout(muteButton,muteParams);}catch(Exception ignored){}
             muteButton.invalidate();
@@ -192,6 +202,8 @@ public class SlideVolService extends Service implements SharedPreferences.OnShar
                 downX=x;downY=y;
                 initialWindowX=barParams.x;initialWindowY=barParams.y;
                 startVolume=muteEngine.rememberedMediaVolume();
+                int maxAtStart=Math.max(1,audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
+                startFraction=Math.max(0f,Math.min(1f,startVolume/(float)maxAtStart));
                 holdTask=()->{if(touching && !moved) movingWindow=true;};
                 mainHandler.postDelayed(holdTask,700);
                 return true;
@@ -209,25 +221,30 @@ public class SlideVolService extends Service implements SharedPreferences.OnShar
                         initialWindowY+Math.round(dy)));
                     try{window.updateViewLayout(bar,barParams);}catch(Exception ignored){}
                     syncMuteButton();
-                }else if(Math.abs(dy)>dp(7) || swiping){
+                }else if(Math.abs(dy)>dp(4) || swiping){
                     if(!swiping) {
                         swiping=true;
                         showActive();
                         if(muteEngine.isMuted()){
                             muteEngine.restore();
                             startVolume=audio.getStreamVolume(AudioManager.STREAM_MUSIC);
+                            int restoredMax=Math.max(1,audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
+                            startFraction=startVolume/(float)restoredMax;
                             if(muteButton!=null)muteButton.invalidate();
                         }
                     }
-                    int max=audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
-                    int sensitivity=Math.max(5,prefs.getInt("sensitivity",14));
-                    int next=Math.max(0,Math.min(max,
-                        startVolume-Math.round(dy/(float)dp(sensitivity))));
+                    // Draw the percentage continuously even though Android exposes
+                    // discrete media-volume steps (typically 15-25).
+                    int max=Math.max(1,audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
+                    int gestureRange=Math.max(140,Math.min(600,prefs.getInt("gestureRange",350)));
+                    float progress=Math.max(0f,Math.min(1f,
+                        startFraction-dy/(float)dp(gestureRange)));
+                    int next=Math.round(progress*max);
                     try {
                         if(next!=audio.getStreamVolume(AudioManager.STREAM_MUSIC))
                             audio.setStreamVolume(AudioManager.STREAM_MUSIC,next,0);
                     }catch(Exception ignored){}
-                    if(bar!=null)bar.invalidate();
+                    if(bar!=null)bar.setDragFraction(progress);
                 }
                 return true;
             case MotionEvent.ACTION_UP:
@@ -240,6 +257,7 @@ public class SlideVolService extends Service implements SharedPreferences.OnShar
                     prefs.edit().putString("side","free")
                         .putFloat("freeX",xx).putFloat("freeY",yy).apply();
                 }
+                if(swiping && bar!=null)bar.animateToSystemLevel();
                 if(swiping||movingWindow)fadeToIdle();
                 // A simple tap is deliberately not a volume action. Android still
                 // consumes it inside the narrow overlay touch region.
@@ -249,16 +267,17 @@ public class SlideVolService extends Service implements SharedPreferences.OnShar
     }
     private void onMuteClicked() {
         muteEngine.toggle();
-        if(bar!=null)bar.invalidate();
         if(muteButton!=null)muteButton.invalidate();
         showActive();
+        if(bar!=null)bar.animateToSystemLevel();
         fadeToIdle();
     }
     @Override public void onSharedPreferenceChanged(SharedPreferences p,String key) {
         if(bar==null||barParams==null) return;
         if(key.equals("side")||key.equals("vertical")||key.equals("freeX")||
             key.equals("freeY")||key.equals("width")||key.equals("height")||
-            key.equals("showMute")) {
+            key.equals("showMute")||key.equals("edgeDistance")||
+            key.equals("muteSize")||key.equals("muteSpacing")) {
             barParams.width=dp(prefs.getInt("width",30));
             barParams.height=dp(prefs.getInt("height",162));
             computePosition();
@@ -269,7 +288,7 @@ public class SlideVolService extends Service implements SharedPreferences.OnShar
             if(bar!=null)bar.setAlpha(idleAlpha());
             if(muteButton!=null)muteButton.setAlpha(idleAlpha());
         }
-        if(bar!=null)bar.invalidate();
+        if(bar!=null)bar.refresh();
         if(muteButton!=null)muteButton.invalidate();
     }
     @Override public void onDestroy() {
