@@ -91,7 +91,7 @@ public class SlideVolService extends Service implements SharedPreferences.OnShar
     private void showBar() {
         bar=new VolumeBarView(this,prefs,audio);
         barParams=new WindowManager.LayoutParams(
-            dp(prefs.getInt("width",30)),dp(prefs.getInt("height",162)),
+            dp(prefs.getInt("width",38)),dp(prefs.getInt("height",170)),
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
@@ -278,8 +278,8 @@ public class SlideVolService extends Service implements SharedPreferences.OnShar
             key.equals("freeY")||key.equals("width")||key.equals("height")||
             key.equals("showMute")||key.equals("edgeDistance")||
             key.equals("muteSize")||key.equals("muteSpacing")) {
-            barParams.width=dp(prefs.getInt("width",30));
-            barParams.height=dp(prefs.getInt("height",162));
+            barParams.width=dp(prefs.getInt("width",38));
+            barParams.height=dp(prefs.getInt("height",170));
             computePosition();
             try{window.updateViewLayout(bar,barParams);}catch(Exception ignored){}
             syncMuteButton();
