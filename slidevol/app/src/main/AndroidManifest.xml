@@ -7,6 +7,8 @@
   <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY"/>
   <application
     android:label="SlideVol"
+    android:icon="@mipmap/ic_launcher"
+    android:roundIcon="@mipmap/ic_launcher_round"
     android:allowBackup="false"
     android:theme="@android:style/Theme.Material.NoActionBar">
     <activity android:name=".SlideVolActivity" android:exported="true">
