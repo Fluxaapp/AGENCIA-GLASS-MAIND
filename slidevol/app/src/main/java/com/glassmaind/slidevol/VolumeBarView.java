@@ -25,6 +25,7 @@ final class VolumeBarView extends View {
     private float fraction;
     private boolean dragging;
     private boolean previewMode;
+    private boolean menuOpen;
     private ValueAnimator animator;
 
     VolumeBarView(Context context, SharedPreferences preferences, AudioManager manager) {
@@ -96,6 +97,10 @@ final class VolumeBarView extends View {
         dragging = active;
         invalidate();
     }
+    void setMenuOpen(boolean open){
+        menuOpen=open;
+        invalidate();
+    }
     @Override protected void onDetachedFromWindow() {
         cancelAnimation();
         super.onDetachedFromWindow();
@@ -128,7 +133,8 @@ final class VolumeBarView extends View {
         canvas.save();
         canvas.clipPath(clip);
         float innerBottom = h-inset;
-        float fullHeight = h-inset*2;
+        float headerBottom = Math.min(h-inset-dp(20),dp(34));
+        float fullHeight = Math.max(dp(10),innerBottom-headerBottom);
         float fillHeight = fullHeight*clamp(fraction);
         if(fillHeight > .1f) {
             int bottom = blend(accent,Color.BLACK,.13f);
@@ -160,6 +166,17 @@ final class VolumeBarView extends View {
         rect.set(inset,inset,w-inset,h-inset);
         canvas.drawRoundRect(rect,radius,radius,paint);
         paint.setStyle(Paint.Style.FILL);
+
+        // Three dots belong to a tappable header, separate from the volume-drag area.
+        float dotsY = Math.min(dp(18),h*.18f);
+        float gap = Math.min(dp(6),w*.20f);
+        paint.setColor(menuOpen ? accent : Color.argb(230,236,247,243));
+        for (int i=-1;i<=1;i++){
+            canvas.drawCircle(w*.5f+i*gap,dotsY,Math.max(dp(1.3f),Math.min(dp(2f),w*.045f)),paint);
+        }
+        paint.setColor(Color.argb(66,235,252,244));
+        canvas.drawRoundRect(dp(8),Math.min(h-dp(12),dp(31)),w-dp(8),
+            Math.min(h-dp(11),dp(32)),dp(.5f),dp(.5f),paint);
 
         // Percentage only when a sufficiently wide control is selected.
         if (dragging && w >= dp(45) && h >= dp(105)) {
