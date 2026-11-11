@@ -170,13 +170,13 @@ public class SlideVolActivity extends Activity
         root.setPadding(dp(20),dp(26),dp(20),dp(45));
         scroll.addView(root);
 
-        TextView eyeline=text("SLIDEVOL  /  1.3",12,accent(),true);
+        TextView eyeline=text("SLIDEVOL  /  1.4",12,accent(),true);
         root.addView(eyeline);
         TextView headline=text("Seu volume.\nSeu controle.",31,TEXT,true);
         LinearLayout.LayoutParams hp=new LinearLayout.LayoutParams(-1,-2);
         hp.topMargin=dp(10);
         root.addView(headline,hp);
-        TextView lead=text("Arraste na lateral do celular para ajustar o volume. Personalize cada detalhe do controle.",14,MUTED_TEXT,false);
+        TextView lead=text("Arraste na lateral para mudar o volume. Toque nos três pontos da barra para abrir mídia, notificações e despertador.",14,MUTED_TEXT,false);
         LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);
         lp.topMargin=dp(7);
         root.addView(lead,lp);
@@ -232,7 +232,7 @@ public class SlideVolActivity extends Activity
         setting(appearance,"Espaço entre barra e botão","muteSpacing",0,48,9," dp");
 
         LinearLayout behavior=panel(root,"TRANSPARÊNCIA & GESTOS",
-            "O controle aparece ao deslizar e volta a ficar discreto após o movimento.");
+            "O controle aparece ao deslizar e volta a ficar discreto após o movimento. Os três pontos da barra abrem o painel expandido.");
         setting(behavior,"Opacidade durante o uso","activeOpacity",20,100,94,"%");
         setting(behavior,"Opacidade em repouso","idleOpacity",0,100,6,"%");
         setting(behavior,"Retorno à transparência","fadeDelay",0,10,2," s");
