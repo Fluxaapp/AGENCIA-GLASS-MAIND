@@ -43,8 +43,8 @@ public class SlideVolService extends Service
     private Handler ui;
     private Runnable closeTimer;
     private int screenW,screenH;
-    private boolean holding, duringInitialGesture, draggingVolume, closing;
-    private float startX,startY,previousX,previousY;
+    private boolean holding, duringInitialGesture, draggingVolume, closing, volumeHover;
+    private float startX,startY,previousX,previousY, volumeHoverStartY;
     private int pointerTarget;
     private int locationX, locationY;
 
@@ -224,7 +224,7 @@ public class SlideVolService extends Service
             case MotionEvent.ACTION_DOWN:
                 holding=true;
                 startX=x;startY=y;previousX=x;previousY=y;
-                draggingVolume=false;pointerTarget=RadialMenuView.NONE;
+                draggingVolume=false;volumeHover=false;pointerTarget=RadialMenuView.NONE;
                 cancelClose();
                 openRadial(true);
                 return true;
@@ -238,10 +238,20 @@ public class SlideVolService extends Service
                         pointerTarget=target;
                         radial.select(target);
                         if(target==RadialMenuView.VOLUME){
-                            draggingVolume=true;
-                            float value=radial.valueAt(py);
-                            radial.setVolumePreview(value);
-                            adjustMedia(value);
+                            if(!volumeHover){
+                                volumeHover=true;
+                                volumeHoverStartY=py;
+                            }
+                            // Do not alter audio just by passing over the volume arc.
+                            // Commit only after vertical movement within its track.
+                            if(Math.abs(py-volumeHoverStartY)>dp(7)){
+                                draggingVolume=true;
+                                float value=radial.valueAt(py);
+                                radial.setVolumePreview(value);
+                                adjustMedia(value);
+                            }
+                        } else {
+                            volumeHover=false;
                         }
                     }
                 }
@@ -256,10 +266,7 @@ public class SlideVolService extends Service
                     if(e.getActionMasked()==MotionEvent.ACTION_UP){
                         if(target==RadialMenuView.MUTE)toggleMute();
                         else if(target==RadialMenuView.ALARM)toggleAlarm();
-                        else if(target==RadialMenuView.VOLUME && !draggingVolume){
-                            float value=radial.valueAt(py);
-                            adjustMedia(value);
-                        }
+                        // Volume changes only during vertical drag, not by a simple tap.
                     }
                     radial.resetVolumePreview();
                     radial.select(RadialMenuView.NONE);
@@ -268,6 +275,7 @@ public class SlideVolService extends Service
                 }
                 pointerTarget=RadialMenuView.NONE;
                 draggingVolume=false;
+                volumeHover=false;
                 return true;
             default:return true;
         }
