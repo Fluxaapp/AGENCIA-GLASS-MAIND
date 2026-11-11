@@ -34,16 +34,15 @@ public class SlideVolActivity extends Activity
     private static final int TEXT=Color.rgb(241,247,245);
     private static final int MUTED_TEXT=Color.rgb(164,178,179);
     private static final int[] PALETTE = {
-        Color.rgb(110,215,183), Color.rgb(119,180,245),
-        Color.rgb(185,160,247), Color.rgb(255,255,255),
+        Color.rgb(255,255,255), Color.rgb(119,180,245),
+        Color.rgb(185,160,247), Color.rgb(110,215,183),
         Color.rgb(247,151,129), Color.rgb(238,205,120),
         Color.rgb(143,232,132)
     };
     private SharedPreferences prefs;
     private MuteEngine muteEngine;
     private TextView overlayStatus, dndStatus, muteStatus, colorCaption;
-    private VolumeBarView preview;
-    private MuteButtonView mutePreview;
+    private RadialMenuView preview;
     private LinearLayout swatchRow;
     private Button muteAction;
     private final ArrayList<SeekBar> sliders=new ArrayList<>();
@@ -170,37 +169,36 @@ public class SlideVolActivity extends Activity
         root.setPadding(dp(20),dp(26),dp(20),dp(45));
         scroll.addView(root);
 
-        TextView eyeline=text("SLIDEVOL  /  1.4",12,accent(),true);
+        TextView eyeline=text("SLIDEVOL  /  1.5",12,accent(),true);
         root.addView(eyeline);
         TextView headline=text("Seu volume.\nSeu controle.",31,TEXT,true);
         LinearLayout.LayoutParams hp=new LinearLayout.LayoutParams(-1,-2);
         hp.topMargin=dp(10);
         root.addView(headline,hp);
-        TextView lead=text("Arraste na lateral para mudar o volume. Toque nos três pontos da barra para abrir mídia, notificações e despertador.",14,MUTED_TEXT,false);
+        TextView lead=text("Uma única ação: toque na linha lateral, deslize e escolha volume, silêncio ou alarme. O menu se recolhe após 2 segundos.",14,MUTED_TEXT,false);
         LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);
         lp.topMargin=dp(7);
         root.addView(lead,lp);
 
-        LinearLayout viewCard=panel(root,"PRÉVIA","Barra e botão redesenhados com visual translúcido, preenchimento suave e ícones centralizados.");
+        LinearLayout viewCard=panel(root,"PRÉVIA DO CONTROLE",
+            "Sem painel preto: somente uma curva translúcida, traços finos e botões discretos.");
         LinearLayout center=new LinearLayout(this);
         center.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams centerParams=new LinearLayout.LayoutParams(-1,dp(204));
+        LinearLayout.LayoutParams centerParams=new LinearLayout.LayoutParams(-1,dp(340));
         viewCard.addView(center,centerParams);
-        LinearLayout previewStack=column();
-        previewStack.setGravity(Gravity.CENTER_HORIZONTAL);
-        center.addView(previewStack);
-        preview=new VolumeBarView(this,prefs,(AudioManager)getSystemService(AUDIO_SERVICE));
-        preview.setDemoMode();
-        LinearLayout.LayoutParams prevParams=new LinearLayout.LayoutParams(
-            dp(Math.min(78,prefs.getInt("width",38))),
-            dp(Math.min(146,prefs.getInt("height",170))));
-        previewStack.addView(preview,prevParams);
-        mutePreview=new MuteButtonView(this,prefs,muteEngine);
-        LinearLayout.LayoutParams mutePreviewParams=new LinearLayout.LayoutParams(
-            dp(Math.min(48,prefs.getInt("muteSize",38))),dp(Math.min(48,prefs.getInt("muteSize",38))));
-        mutePreviewParams.topMargin=dp(9);
-        previewStack.addView(mutePreview,mutePreviewParams);
-        mutePreview.setVisibility(prefs.getBoolean("showMute",true)?View.VISIBLE:View.GONE);
+        preview=new RadialMenuView(this,
+            (AudioManager)getSystemService(AUDIO_SERVICE),muteEngine,prefs,
+            new RadialMenuView.Actions(){
+                @Override public void onVolume(float amount){}
+                @Override public void onMute(){}
+                @Override public void onAlarm(){}
+                @Override public void onDismiss(){}
+                @Override public void onTouchState(boolean touching){}
+            });
+        LinearLayout.LayoutParams previewParams=new LinearLayout.LayoutParams(dp(235),dp(335));
+        center.addView(preview,previewParams);
+        preview.setOnTouchListener((view,event)->true);
+        preview.open();
 
         LinearLayout control=panel(root,"ATIVAÇÃO","Mantenha a barra disponível sobre os aplicativos.");
         overlayStatus=text("",13,accent(),false);
@@ -212,8 +210,8 @@ public class SlideVolActivity extends Activity
             updateStatuses();
         });
 
-        LinearLayout appearance=panel(root,"COR & ESTILO",
-            "Escolha uma cor ou digite qualquer código hexadecimal.");
+        LinearLayout appearance=panel(root,"COR & TRANSPARÊNCIA",
+            "Traços brancos translúcidos por padrão. A cor personalizada afeta o preenchimento da curva.");
         colorCaption=text("",13,accent(),true);
         appearance.addView(colorCaption);
         HorizontalScrollView horizontal=new HorizontalScrollView(this);
@@ -225,24 +223,17 @@ public class SlideVolActivity extends Activity
         appearance.addView(horizontal);
         populateSwatches();
         action(appearance,"Usar cor personalizada (#HEX)",false,v->promptColor());
-        toggle(appearance,"Mostrar botão de silenciar", "showMute",true);
-        setting(appearance,"Largura da barra","width",24,90,38," dp");
-        setting(appearance,"Altura da barra","height",90,300,170," dp");
-        setting(appearance,"Tamanho do botão de silêncio","muteSize",28,76,38," dp");
-        setting(appearance,"Espaço entre barra e botão","muteSpacing",0,48,9," dp");
 
-        LinearLayout behavior=panel(root,"TRANSPARÊNCIA & GESTOS",
-            "O controle aparece ao deslizar e volta a ficar discreto após o movimento. Os três pontos da barra abrem o painel expandido.");
-        setting(behavior,"Opacidade durante o uso","activeOpacity",20,100,94,"%");
-        setting(behavior,"Opacidade em repouso","idleOpacity",0,100,6,"%");
-        setting(behavior,"Retorno à transparência","fadeDelay",0,10,2," s");
-        setting(behavior,"Distância do deslize (0–100%)","gestureRange",140,600,350," dp");
-        setting(behavior,"Suavização visual","animationMs",0,400,170," ms");
-        note(behavior,"Quanto maior a distância, mais preciso fica o ajuste. A barra acompanha o dedo continuamente; o áudio ainda usa os níveis discretos do Android.");
-        note(behavior,"0% em repouso torna a barra totalmente invisível. Mesmo assim, a faixa sensível continua capturando toques nessa pequena área.");
-        note(behavior,"Um toque simples não modifica o volume. Para não bloquear outros botões, use uma barra estreita e coloque-a na borda.");
+        LinearLayout behavior=panel(root,"ANIMAÇÕES & GESTOS",
+            "Abertura direta, seleção pelo mesmo deslize e fechamento automático em 2 segundos.");
+        setting(behavior,"Opacidade durante o uso","activeOpacity",20,100,100,"%");
+        setting(behavior,"Visibilidade da linha em repouso","idleOpacity",0,100,20,"%");
+        setting(behavior,"Abertura da animação","openMs",180,650,330," ms");
+        setting(behavior,"Fechamento da animação","closeMs",150,550,260," ms");
+        note(behavior,"O volume acompanha a posição na curva. Mídia continua limitada aos níveis físicos de áudio do Android.");
+        note(behavior,"Quando recolhido, apenas a pequena linha lateral recebe toques, evitando bloquear grande parte dos outros aplicativos.");
 
-        LinearLayout placement=panel(root,"POSIÇÃO","Escolha a lateral ou segure por 0,7 s para arrastar livremente.");
+        LinearLayout placement=panel(root,"POSIÇÃO","Escolha a lateral, a distância da borda e a altura da linha discreta.");
         LinearLayout sideRow=new LinearLayout(this);
         Button left=new Button(this),right=new Button(this);
         left.setText("Esquerda");right.setText("Direita");
@@ -268,10 +259,10 @@ public class SlideVolActivity extends Activity
         else right.setBackground(surface(accent(),12));
         setting(placement,"Posição vertical","vertical",0,100,30,"%");
         setting(placement,"Distância da borda","edgeDistance",0,120,10," dp");
-        note(placement,"Ao ajustar a distância, o SlideVol fixa a barra na lateral mais próxima, mesmo se ela foi posicionada livremente.");
+        note(placement,"Apenas a pequena linha discreta permanece no canto quando o menu está recolhido.");
 
         LinearLayout sound=panel(root,"SILENCIAR TUDO",
-            "O botão sob a barra tenta zerar mídia, toque, alarmes, notificações e sons do sistema.");
+            "O ícone inferior do menu radial ativa ou restaura os volumes. O despertador superior alterna entre 0 e máximo.");
         muteStatus=text("",13,accent(),true);
         sound.addView(muteStatus);
         muteAction=new Button(this);
@@ -347,21 +338,15 @@ public class SlideVolActivity extends Activity
     }
     private void resetAppearance(){
         prefs.edit()
-            .putInt("accentColor",PALETTE[0])
-            .putInt("width",38)
-            .putInt("height",170)
-            .putInt("muteSize",38)
-            .putInt("muteSpacing",9)
-            .putInt("edgeDistance",10)
-            .putInt("gestureRange",350)
-            .putInt("animationMs",170)
-            .putInt("activeOpacity",94)
-            .putInt("idleOpacity",6)
-            .putInt("fadeDelay",2)
-            .putInt("sensitivity",14)
+            .putInt("accentColor",Color.WHITE)
+            .putInt("activeOpacity",100)
+            .putInt("idleOpacity",20)
+            .putInt("openMs",330)
+            .putInt("closeMs",260)
             .putInt("vertical",30)
+            .putInt("edgeDistance",10)
             .putString("side","right")
-            .putBoolean("showMute",true).apply();
+            .apply();
         recreate();
     }
     private void enableOverlay(){
@@ -417,31 +402,12 @@ public class SlideVolActivity extends Activity
         super.onPause();
     }
     @Override public void onSharedPreferenceChanged(SharedPreferences shared,String key){
-        if(preview!=null){
-            LinearLayout.LayoutParams lp=(LinearLayout.LayoutParams)preview.getLayoutParams();
-            if(lp!=null && ("width".equals(key)||"height".equals(key))){
-                lp.width=dp(Math.min(78,prefs.getInt("width",38)));
-                lp.height=dp(Math.min(146,prefs.getInt("height",170)));
-                preview.setLayoutParams(lp);
-            }
-            preview.invalidate();
-        }
-        if(mutePreview!=null){
-            if("muteSize".equals(key)){
-                LinearLayout.LayoutParams mp=(LinearLayout.LayoutParams)mutePreview.getLayoutParams();
-                mp.width=dp(Math.min(48,prefs.getInt("muteSize",38)));
-                mp.height=mp.width;
-                mutePreview.setLayoutParams(mp);
-            }
-            if("showMute".equals(key))mutePreview.setVisibility(
-                prefs.getBoolean("showMute",true)?View.VISIBLE:View.GONE);
-            mutePreview.invalidate();
-        }
+        if(preview!=null)preview.invalidateAudio();
         if("accentColor".equals(key)){
             populateSwatches();
-            for(SeekBar s:sliders){
-                s.setProgressTintList(ColorStateList.valueOf(accent()));
-                s.setThumbTintList(ColorStateList.valueOf(accent()));
+            for(SeekBar seek:sliders){
+                seek.setProgressTintList(ColorStateList.valueOf(accent()));
+                seek.setThumbTintList(ColorStateList.valueOf(accent()));
             }
         }
         if("allMuted".equals(key))updateStatuses();
