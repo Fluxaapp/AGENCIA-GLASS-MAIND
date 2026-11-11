@@ -48,6 +48,7 @@ final class RadialMenuView extends View {
     private int selection = NONE;
     private boolean animatingOut;
     private boolean touchMoving;
+    private boolean mirrored;
 
     RadialMenuView(Context context, AudioManager audio, MuteEngine mute,
                    SharedPreferences settings, Actions actions) {
@@ -76,6 +77,7 @@ final class RadialMenuView extends View {
     float muteY() { return hy()+dp(112); }
     boolean isOpen() { return expansion > .03f && !animatingOut; }
     void select(int value) { selection=value; invalidate(); }
+    void setMirrored(boolean left){ mirrored=left; invalidate(); }
     void setVolumePreview(float f) { visualVolume=sat(f);invalidate(); }
     void resetVolumePreview() { visualVolume=-1;invalidate(); }
     void invalidateAudio() { invalidate(); }
@@ -102,6 +104,7 @@ final class RadialMenuView extends View {
 
     /** Hit-test by actual pointer location, not sequential button taps. */
     int targetAt(float x,float y) {
+        if(mirrored)x=getWidth()-x;
         float centerX=hx(),centerY=hy();
         if(distance(x,y,alarmX(),alarmY())<dp(34))return ALARM;
         if(distance(x,y,muteX(),muteY())<dp(34))return MUTE;
@@ -152,6 +155,11 @@ final class RadialMenuView extends View {
 
     @Override protected void onDraw(Canvas c) {
         super.onDraw(c);
+        if(mirrored) {
+            c.save();
+            c.translate(getWidth(),0);
+            c.scale(-1f,1f);
+        }
         float centerX=hx(),centerY=hy();
         float hubProgress=reveal(0f,.32f);
         float trackProgress=reveal(.16f,.73f);
@@ -264,6 +272,7 @@ final class RadialMenuView extends View {
             catch(Exception ignored){}
             dot(c,x,y,selection==ALARM||disabled,alarmProgress);
         }
+        if(mirrored)c.restore();
     }
 
     private boolean isTapMoved;
