@@ -22,9 +22,10 @@ public class SlideVolService extends Service implements SharedPreferences.OnShar
     static final String STOP = "com.glassmaind.slidevol.STOP";
     static final String TOGGLE_MUTE = "com.glassmaind.slidevol.TOGGLE_MUTE";
     private WindowManager window;
-    private WindowManager.LayoutParams barParams, muteParams;
+    private WindowManager.LayoutParams barParams, muteParams, panelParams;
     private VolumeBarView bar;
     private MuteButtonView muteButton;
+    private ExpandedVolumePanel expandedPanel;
     private SharedPreferences prefs;
     private AudioManager audio;
     private MuteEngine muteEngine;
@@ -33,7 +34,7 @@ public class SlideVolService extends Service implements SharedPreferences.OnShar
     private int displayW, displayH, startVolume, initialWindowX, initialWindowY;
     private float startFraction;
     private float downX, downY;
-    private boolean touching, moved, movingWindow, swiping;
+    private boolean touching, moved, movingWindow, swiping, pressedMenu;
 
     private int dp(float number) {
         return (int)(number*getResources().getDisplayMetrics().density+.5f);
@@ -169,6 +170,64 @@ public class SlideVolService extends Service implements SharedPreferences.OnShar
             muteButton.invalidate();
         }
     }
+    private void updatePanelPosition() {
+        if(panelParams==null||barParams==null) return;
+        int margin=dp(10);
+        int x;
+        if(barParams.x>displayW/2) {
+            x=barParams.x-panelParams.width-margin;
+        }else{
+            x=barParams.x+barParams.width+margin;
+        }
+        panelParams.x=Math.max(dp(3),Math.min(displayW-panelParams.width-dp(3),x));
+        panelParams.y=Math.max(dp(10),Math.min(displayH-panelParams.height-dp(10),
+            barParams.y + barParams.height/2-panelParams.height/2));
+    }
+    private void openVolumePanel() {
+        if(bar==null || expandedPanel!=null)return;
+        if(fadeTask!=null) mainHandler.removeCallbacks(fadeTask);
+        showActive();
+        bar.setMenuOpen(true);
+        expandedPanel=new ExpandedVolumePanel(this,prefs,audio,muteEngine,
+            new ExpandedVolumePanel.Listener(){
+                @Override public void onClose(){ closeVolumePanel(); }
+                @Override public void onInteraction(){
+                    if(bar!=null)bar.refresh();
+                    if(muteButton!=null)muteButton.invalidate();
+                }
+            });
+        panelParams=new WindowManager.LayoutParams(
+            dp(288),dp(320),WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            PixelFormat.TRANSLUCENT);
+        panelParams.gravity=Gravity.TOP|Gravity.LEFT;
+        updatePanelPosition();
+        try { window.addView(expandedPanel,panelParams); }
+        catch(Exception ignored) {
+            expandedPanel=null;
+            panelParams=null;
+            bar.setMenuOpen(false);
+            fadeToIdle();
+        }
+    }
+    private void closeVolumePanel() {
+        if(expandedPanel!=null) {
+            try { window.removeView(expandedPanel); } catch(Exception ignored){}
+            expandedPanel=null;
+            panelParams=null;
+        }
+        if(bar!=null){
+            bar.setMenuOpen(false);
+            bar.animateToSystemLevel();
+        }
+        fadeToIdle();
+    }
+    private void toggleVolumePanel(){
+        if(expandedPanel==null)openVolumePanel();
+        else closeVolumePanel();
+    }
+
     private void showActive() {
         if(fadeTask!=null)mainHandler.removeCallbacks(fadeTask);
         if(bar!=null) {
@@ -182,6 +241,7 @@ public class SlideVolService extends Service implements SharedPreferences.OnShar
         }
     }
     private void fadeToIdle() {
+        if(expandedPanel!=null)return;
         if(fadeTask!=null)mainHandler.removeCallbacks(fadeTask);
         final int delay=prefs.getInt("fadeDelay",2);
         fadeTask=()->{
@@ -199,6 +259,7 @@ public class SlideVolService extends Service implements SharedPreferences.OnShar
         switch(e.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
                 touching=true; moved=false; movingWindow=false; swiping=false;
+                pressedMenu=e.getY() <= dp(36);
                 downX=x;downY=y;
                 initialWindowX=barParams.x;initialWindowY=barParams.y;
                 startVolume=muteEngine.rememberedMediaVolume();
@@ -221,6 +282,11 @@ public class SlideVolService extends Service implements SharedPreferences.OnShar
                         initialWindowY+Math.round(dy)));
                     try{window.updateViewLayout(bar,barParams);}catch(Exception ignored){}
                     syncMuteButton();
+                    if(expandedPanel!=null && panelParams!=null){
+                        updatePanelPosition();
+                        try{window.updateViewLayout(expandedPanel,panelParams);}
+                        catch(Exception ignored){}
+                    }
                 }else if(Math.abs(dy)>dp(4) || swiping){
                     if(!swiping) {
                         swiping=true;
@@ -251,6 +317,14 @@ public class SlideVolService extends Service implements SharedPreferences.OnShar
             case MotionEvent.ACTION_CANCEL:
                 touching=false;
                 if(holdTask!=null)mainHandler.removeCallbacks(holdTask);
+                boolean clickMenu=e.getActionMasked()==MotionEvent.ACTION_UP &&
+                    pressedMenu && !moved && !movingWindow && !swiping &&
+                    e.getY()<=dp(43);
+                pressedMenu=false;
+                if(clickMenu){
+                    toggleVolumePanel();
+                    return true;
+                }
                 if(movingWindow){
                     float xx=barParams.x/(float)Math.max(1,displayW-barParams.width);
                     float yy=barParams.y/(float)Math.max(1,maxVertical());
@@ -283,19 +357,29 @@ public class SlideVolService extends Service implements SharedPreferences.OnShar
             computePosition();
             try{window.updateViewLayout(bar,barParams);}catch(Exception ignored){}
             syncMuteButton();
+            if(expandedPanel!=null && panelParams!=null) {
+                updatePanelPosition();
+                try{window.updateViewLayout(expandedPanel,panelParams);}
+                catch(Exception ignored){}
+            }
         }
-        if(key.equals("idleOpacity") && !swiping && !movingWindow){
+        if(key.equals("idleOpacity") && !swiping && !movingWindow && expandedPanel==null){
             if(bar!=null)bar.setAlpha(idleAlpha());
             if(muteButton!=null)muteButton.setAlpha(idleAlpha());
         }
         if(bar!=null)bar.refresh();
         if(muteButton!=null)muteButton.invalidate();
+        if(expandedPanel!=null)expandedPanel.refresh();
     }
     @Override public void onDestroy() {
         if(prefs!=null)prefs.unregisterOnSharedPreferenceChangeListener(this);
         if(mainHandler!=null){
             if(holdTask!=null)mainHandler.removeCallbacks(holdTask);
             if(fadeTask!=null)mainHandler.removeCallbacks(fadeTask);
+        }
+        if(expandedPanel!=null){
+            try{window.removeView(expandedPanel);}catch(Exception ignored){}
+            expandedPanel=null;panelParams=null;
         }
         if(muteButton!=null){
             try{window.removeView(muteButton);}catch(Exception ignored){}
