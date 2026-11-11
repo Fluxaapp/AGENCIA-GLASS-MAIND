@@ -7,7 +7,11 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.PixelFormat;
+import android.graphics.RectF;
 import android.media.AudioManager;
 import android.os.Handler;
 import android.os.IBinder;
@@ -17,381 +21,346 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
+import android.widget.Toast;
 
-public class SlideVolService extends Service implements SharedPreferences.OnSharedPreferenceChangeListener {
+/**
+ * A narrow, discreet edge hit area captures the FIRST finger down.
+ * A separate radial window shows the menu and receives subsequent interactions.
+ * During the originating finger gesture it is FLAG_NOT_TOUCHABLE so the handle
+ * continues receiving MOVE and UP, enabling a full one-gesture operation.
+ */
+public class SlideVolService extends Service
+        implements SharedPreferences.OnSharedPreferenceChangeListener {
     static final String STOP = "com.glassmaind.slidevol.STOP";
     static final String TOGGLE_MUTE = "com.glassmaind.slidevol.TOGGLE_MUTE";
     private WindowManager window;
-    private WindowManager.LayoutParams barParams, muteParams, panelParams;
-    private VolumeBarView bar;
-    private MuteButtonView muteButton;
-    private ExpandedVolumePanel expandedPanel;
+    private WindowManager.LayoutParams handleParams, menuParams;
+    private EdgeHandle handle;
+    private RadialMenuView radial;
     private SharedPreferences prefs;
     private AudioManager audio;
     private MuteEngine muteEngine;
-    private Handler mainHandler;
-    private Runnable holdTask, fadeTask;
-    private int displayW, displayH, startVolume, initialWindowX, initialWindowY;
-    private float startFraction;
-    private float downX, downY;
-    private boolean touching, moved, movingWindow, swiping, pressedMenu;
+    private Handler ui;
+    private Runnable closeTimer;
+    private int screenW,screenH;
+    private boolean holding, duringInitialGesture, draggingVolume, closing;
+    private float startX,startY,previousX,previousY;
+    private int pointerTarget;
+    private int locationX, locationY;
 
-    private int dp(float number) {
-        return (int)(number*getResources().getDisplayMetrics().density+.5f);
+    private int dp(float n) {
+        return (int)(n*getResources().getDisplayMetrics().density+.5f);
     }
-    private float activeAlpha() {
-        return Math.max(.15f,Math.min(1f,prefs.getInt("activeOpacity",94)/100f));
+    private float idleAlpha(){
+        return Math.max(0f,Math.min(1f,prefs.getInt("idleOpacity",20)/100f));
     }
-    private float idleAlpha() {
-        return Math.max(0f,Math.min(1f,prefs.getInt("idleOpacity",6)/100f));
+    private float activeAlpha(){
+        return Math.max(.15f,Math.min(1f,prefs.getInt("activeOpacity",100)/100f));
     }
-    @Override public void onCreate() {
+    @Override public void onCreate(){
         super.onCreate();
         window=(WindowManager)getSystemService(WINDOW_SERVICE);
         prefs=getSharedPreferences(SlideVolActivity.PREFS,MODE_PRIVATE);
         prefs.registerOnSharedPreferenceChangeListener(this);
         audio=(AudioManager)getSystemService(AUDIO_SERVICE);
         muteEngine=new MuteEngine(this);
-        mainHandler=new Handler(Looper.getMainLooper());
+        ui=new Handler(Looper.getMainLooper());
         android.util.DisplayMetrics dm=new android.util.DisplayMetrics();
         window.getDefaultDisplay().getRealMetrics(dm);
-        displayW=dm.widthPixels;displayH=dm.heightPixels;
+        screenW=dm.widthPixels;
+        screenH=dm.heightPixels;
         ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).createNotificationChannel(
-            new NotificationChannel("slidevol","SlideVol em execução",NotificationManager.IMPORTANCE_LOW));
+            new NotificationChannel("slidevol","SlideVol",NotificationManager.IMPORTANCE_LOW));
     }
-
-    @Override public int onStartCommand(Intent intent,int flags,int startId) {
-        if (intent!=null && STOP.equals(intent.getAction())) {
-            stopSelf();return START_NOT_STICKY;
+    @Override public int onStartCommand(Intent intent,int flags,int startId){
+        if(intent!=null && STOP.equals(intent.getAction())){
+            stopSelf();
+            return START_NOT_STICKY;
         }
-        if (!Settings.canDrawOverlays(this)) {
-            stopSelf();return START_NOT_STICKY;
+        if(!Settings.canDrawOverlays(this)){
+            stopSelf();
+            return START_NOT_STICKY;
         }
-        if (intent!=null && TOGGLE_MUTE.equals(intent.getAction()) && bar!=null) {
-            onMuteClicked();
+        if(intent!=null && TOGGLE_MUTE.equals(intent.getAction())&&handle!=null){
+            toggleMute();
             return START_STICKY;
         }
-        PendingIntent activity=PendingIntent.getActivity(this,1,new Intent(this,SlideVolActivity.class),
+        PendingIntent open=PendingIntent.getActivity(this,1,new Intent(this,SlideVolActivity.class),
             PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
-        PendingIntent stop=PendingIntent.getService(this,2,new Intent(this,SlideVolService.class).setAction(STOP),
+        PendingIntent stop=PendingIntent.getService(this,2,
+            new Intent(this,SlideVolService.class).setAction(STOP),
             PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
-        Notification note=new Notification.Builder(this,"slidevol")
+        Notification n=new Notification.Builder(this,"slidevol")
             .setSmallIcon(R.drawable.ic_status_slidevol)
             .setContentTitle("SlideVol ativo")
-            .setContentText("Arraste a barra na lateral para alterar o volume")
-            .setContentIntent(activity)
-            .setOngoing(true)
+            .setContentText("Deslize na lateral para controlar o volume")
+            .setContentIntent(open).setOngoing(true)
             .addAction(new Notification.Action.Builder(
                 android.R.drawable.ic_menu_close_clear_cancel,"Desativar",stop).build())
             .build();
-        startForeground(24,note);
-        if (bar==null) showBar();
+        startForeground(24,n);
+        if(handle==null)showHandle();
         return START_STICKY;
     }
-
-    private void showBar() {
-        bar=new VolumeBarView(this,prefs,audio);
-        barParams=new WindowManager.LayoutParams(
-            dp(prefs.getInt("width",38)),dp(prefs.getInt("height",170)),
+    private void setPosition() {
+        if(handleParams==null)return;
+        int gap=dp(Math.max(0,Math.min(120,prefs.getInt("edgeDistance",10))));
+        String side=prefs.getString("side","right");
+        if("free".equals(side)){
+            handleParams.x=Math.max(0,Math.min(screenW-handleParams.width,
+                Math.round(prefs.getFloat("freeX",.9f)*(screenW-handleParams.width))));
+            handleParams.y=Math.max(0,Math.min(screenH-handleParams.height,
+                Math.round(prefs.getFloat("freeY",.34f)*(screenH-handleParams.height))));
+        }else{
+            handleParams.x="left".equals(side)?
+                Math.min(screenW-handleParams.width,gap):
+                Math.max(0,screenW-handleParams.width-gap);
+            handleParams.y=Math.max(0,Math.min(screenH-handleParams.height,
+                Math.round(prefs.getInt("vertical",30)/100f*(screenH-handleParams.height))));
+        }
+    }
+    private void showHandle(){
+        handle=new EdgeHandle(this);
+        handleParams=new WindowManager.LayoutParams(dp(35),dp(86),
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT);
-        barParams.gravity=Gravity.TOP|Gravity.LEFT;
-        computePosition();
-        bar.setOnTouchListener((view,e)->handleGesture(e));
-        bar.setAlpha(idleAlpha());
-        try {
-            window.addView(bar,barParams);
-            syncMuteButton();
-        } catch (Exception ex) {
-            bar=null;stopSelf();
-        }
+        handleParams.gravity=Gravity.TOP|Gravity.LEFT;
+        setPosition();
+        handle.setAlpha(idleAlpha());
+        handle.setOnTouchListener((v,e)->onHandleTouch(e));
+        try{window.addView(handle,handleParams);}
+        catch(Exception ignored){handle=null;stopSelf();}
     }
-
-    private int maxVertical() {
-        int extra = prefs.getBoolean("showMute",true)
-            ? dp(prefs.getInt("muteSize",38)+prefs.getInt("muteSpacing",9)+14)
-            : dp(14);
-        return Math.max(0,displayH-barParams.height-extra);
+    private int menuWidth(){return dp(235);}
+    private int menuHeight(){return dp(350);}
+    private void placeMenu(){
+        if(menuParams==null||handleParams==null)return;
+        // Popup is aligned with the side handle but does not cover the whole screen.
+        boolean right=handleParams.x>screenW*.5f;
+        int targetX=right ?
+            handleParams.x-menuParams.width+handleParams.width+dp(3):
+            handleParams.x-dp(3);
+        menuParams.x=Math.max(0,Math.min(screenW-menuParams.width,targetX));
+        menuParams.y=Math.max(0,Math.min(screenH-menuParams.height,
+            handleParams.y+handleParams.height/2-menuParams.height/2));
     }
-    private void computePosition() {
-        String side=prefs.getString("side","right");
-        int maxX=Math.max(0,displayW-barParams.width);
-        if("free".equals(side)) {
-            barParams.x=Math.max(0,Math.min(maxX,Math.round(prefs.getFloat("freeX",.9f)*maxX)));
-            barParams.y=Math.max(0,Math.min(maxVertical(),
-                Math.round(prefs.getFloat("freeY",.34f)*maxVertical())));
-        } else {
-            int margin = dp(Math.max(0,Math.min(120,prefs.getInt("edgeDistance",10))));
-            barParams.x="left".equals(side)
-                ? Math.max(0,Math.min(maxX,margin))
-                : Math.max(0,maxX-margin);
-            barParams.y=Math.round(Math.max(0,Math.min(100,prefs.getInt("vertical",30)))/100f * maxVertical());
-        }
-    }
-    private void positionMuteButton() {
-        if(muteParams==null||barParams==null) return;
-        muteParams.x=Math.max(0,Math.min(displayW-muteParams.width,
-            barParams.x+(barParams.width-muteParams.width)/2));
-        muteParams.y=Math.max(0,Math.min(displayH-muteParams.height-dp(5),
-            barParams.y+barParams.height+
-                dp(Math.max(0,Math.min(75,prefs.getInt("muteSpacing",9))))));
-    }
-    private void syncMuteButton() {
-        if(bar==null) return;
-        if(!prefs.getBoolean("showMute",true)) {
-            if(muteButton!=null) {
-                try{window.removeView(muteButton);}catch(Exception ignored){}
-                muteButton=null;muteParams=null;
-            }
-            return;
-        }
-        if(muteButton==null) {
-            muteButton=new MuteButtonView(this,prefs,muteEngine);
-            int size=dp(Math.max(28,Math.min(76,prefs.getInt("muteSize",38))));
-            muteParams=new WindowManager.LayoutParams(size,size,
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-                PixelFormat.TRANSLUCENT);
-            muteParams.gravity=Gravity.TOP|Gravity.LEFT;
-            positionMuteButton();
-            muteButton.setOnClickListener(view->onMuteClicked());
-            muteButton.setAlpha(idleAlpha());
-            try {window.addView(muteButton,muteParams);}
-            catch(Exception ignored){muteButton=null;muteParams=null;}
-        } else {
-            int size=dp(Math.max(28,Math.min(76,prefs.getInt("muteSize",38))));
-            muteParams.width=size;
-            muteParams.height=size;
-            positionMuteButton();
-            try{window.updateViewLayout(muteButton,muteParams);}catch(Exception ignored){}
-            muteButton.invalidate();
-        }
-    }
-    private void updatePanelPosition() {
-        if(panelParams==null||barParams==null) return;
-        int margin=dp(10);
-        int x;
-        if(barParams.x>displayW/2) {
-            x=barParams.x-panelParams.width-margin;
-        }else{
-            x=barParams.x+barParams.width+margin;
-        }
-        panelParams.x=Math.max(dp(3),Math.min(displayW-panelParams.width-dp(3),x));
-        panelParams.y=Math.max(dp(10),Math.min(displayH-panelParams.height-dp(10),
-            barParams.y + barParams.height/2-panelParams.height/2));
-    }
-    private void openVolumePanel() {
-        if(bar==null || expandedPanel!=null)return;
-        if(fadeTask!=null) mainHandler.removeCallbacks(fadeTask);
-        showActive();
-        bar.setMenuOpen(true);
-        expandedPanel=new ExpandedVolumePanel(this,prefs,audio,muteEngine,
-            new ExpandedVolumePanel.Listener(){
-                @Override public void onClose(){ closeVolumePanel(); }
-                @Override public void onInteraction(){
-                    if(bar!=null)bar.refresh();
-                    if(muteButton!=null)muteButton.invalidate();
+    private void openRadial(boolean firstGesture){
+        if(radial!=null || handle==null)return;
+        if(closeTimer!=null)ui.removeCallbacks(closeTimer);
+        closing=false;
+        duringInitialGesture=firstGesture;
+        radial=new RadialMenuView(this,audio,muteEngine,prefs,
+            new RadialMenuView.Actions(){
+                @Override public void onVolume(float level){adjustMedia(level);}
+                @Override public void onMute(){toggleMute();}
+                @Override public void onAlarm(){toggleAlarm();}
+                @Override public void onDismiss(){requestClose();}
+                @Override public void onTouchState(boolean touched){
+                    holding=touched;
+                    if(touched)cancelClose();
+                    else scheduleClose();
                 }
             });
-        panelParams=new WindowManager.LayoutParams(
-            dp(288),dp(320),WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+        int flags=WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL |
+            WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH;
+        if(firstGesture)flags|=WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+        menuParams=new WindowManager.LayoutParams(menuWidth(),menuHeight(),
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, flags,
             PixelFormat.TRANSLUCENT);
-        panelParams.gravity=Gravity.TOP|Gravity.LEFT;
-        updatePanelPosition();
-        try { window.addView(expandedPanel,panelParams); }
-        catch(Exception ignored) {
-            expandedPanel=null;
-            panelParams=null;
-            bar.setMenuOpen(false);
-            fadeToIdle();
+        menuParams.gravity=Gravity.TOP|Gravity.LEFT;
+        placeMenu();
+        try{
+            window.addView(radial,menuParams);
+            radial.setAlpha(activeAlpha());
+            radial.open();
+            handle.setAlpha(0f);
+        }catch(Exception ignored){
+            radial=null;menuParams=null;duringInitialGesture=false;
+            handle.setAlpha(idleAlpha());
         }
     }
-    private void closeVolumePanel() {
-        if(expandedPanel!=null) {
-            try { window.removeView(expandedPanel); } catch(Exception ignored){}
-            expandedPanel=null;
-            panelParams=null;
-        }
-        if(bar!=null){
-            bar.setMenuOpen(false);
-            bar.animateToSystemLevel();
-        }
-        fadeToIdle();
+    private void unlockMenuTouch(){
+        if(radial==null||menuParams==null)return;
+        menuParams.flags&=~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+        try{window.updateViewLayout(radial,menuParams);}
+        catch(Exception ignored){}
+        duringInitialGesture=false;
     }
-    private void toggleVolumePanel(){
-        if(expandedPanel==null)openVolumePanel();
-        else closeVolumePanel();
-    }
-
-    private void showActive() {
-        if(fadeTask!=null)mainHandler.removeCallbacks(fadeTask);
-        if(bar!=null) {
-            bar.animate().cancel();
-            bar.setAlpha(activeAlpha());
-            bar.setGestureActive(true);
-        }
-        if(muteButton!=null) {
-            muteButton.animate().cancel();
-            muteButton.setAlpha(activeAlpha());
+    private void cancelClose(){
+        if(closeTimer!=null){
+            ui.removeCallbacks(closeTimer);
+            closeTimer=null;
         }
     }
-    private void fadeToIdle() {
-        if(expandedPanel!=null)return;
-        if(fadeTask!=null)mainHandler.removeCallbacks(fadeTask);
-        final int delay=prefs.getInt("fadeDelay",2);
-        fadeTask=()->{
-            if(bar!=null){
-                bar.setGestureActive(false);
-                bar.animate().alpha(idleAlpha()).setDuration(400).start();
+    private void scheduleClose(){
+        cancelClose();
+        closeTimer=()->{if(!holding)requestClose();};
+        ui.postDelayed(closeTimer,2000);
+    }
+    private void requestClose(){
+        if(radial==null||closing)return;
+        closing=true;
+        cancelClose();
+        final RadialMenuView closingView=radial;
+        closingView.close(()->{
+            if(radial!=closingView)return;
+            try{window.removeView(closingView);}catch(Exception ignored){}
+            radial=null;menuParams=null;closing=false;
+            if(handle!=null){
+                handle.animate().cancel();
+                handle.setAlpha(0f);
+                handle.animate().alpha(idleAlpha()).setDuration(250).start();
             }
-            if(muteButton!=null)muteButton.animate().alpha(idleAlpha()).setDuration(400).start();
-        };
-        mainHandler.postDelayed(fadeTask,Math.max(0,delay)*1000L);
+        });
     }
-
-    private boolean handleGesture(MotionEvent e) {
+    private float rawToX(float raw){return raw-menuParams.x;}
+    private float rawToY(float raw){return raw-menuParams.y;}
+    private boolean onHandleTouch(MotionEvent e){
         float x=e.getRawX(),y=e.getRawY();
-        switch(e.getActionMasked()) {
+        switch(e.getActionMasked()){
             case MotionEvent.ACTION_DOWN:
-                touching=true; moved=false; movingWindow=false; swiping=false;
-                pressedMenu=e.getY() <= dp(36);
-                downX=x;downY=y;
-                initialWindowX=barParams.x;initialWindowY=barParams.y;
-                startVolume=muteEngine.rememberedMediaVolume();
-                int maxAtStart=Math.max(1,audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
-                startFraction=Math.max(0f,Math.min(1f,startVolume/(float)maxAtStart));
-                holdTask=()->{if(touching && !moved) movingWindow=true;};
-                mainHandler.postDelayed(holdTask,700);
+                holding=true;
+                startX=x;startY=y;previousX=x;previousY=y;
+                draggingVolume=false;pointerTarget=RadialMenuView.NONE;
+                cancelClose();
+                openRadial(true);
                 return true;
             case MotionEvent.ACTION_MOVE:
-                float dx=x-downX,dy=y-downY;
-                if(!moved && (Math.abs(dx)>dp(6)||Math.abs(dy)>dp(6))){
-                    moved=true;
-                    if(holdTask!=null)mainHandler.removeCallbacks(holdTask);
-                }
-                if(movingWindow){
-                    showActive();
-                    barParams.x=Math.max(0,Math.min(displayW-barParams.width,
-                        initialWindowX+Math.round(dx)));
-                    barParams.y=Math.max(0,Math.min(maxVertical(),
-                        initialWindowY+Math.round(dy)));
-                    try{window.updateViewLayout(bar,barParams);}catch(Exception ignored){}
-                    syncMuteButton();
-                    if(expandedPanel!=null && panelParams!=null){
-                        updatePanelPosition();
-                        try{window.updateViewLayout(expandedPanel,panelParams);}
-                        catch(Exception ignored){}
-                    }
-                }else if(Math.abs(dy)>dp(4) || swiping){
-                    if(!swiping) {
-                        swiping=true;
-                        showActive();
-                        if(muteEngine.isMuted()){
-                            muteEngine.restore();
-                            startVolume=audio.getStreamVolume(AudioManager.STREAM_MUSIC);
-                            int restoredMax=Math.max(1,audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
-                            startFraction=startVolume/(float)restoredMax;
-                            if(muteButton!=null)muteButton.invalidate();
+                previousX=x;previousY=y;
+                if(radial!=null && menuParams!=null){
+                    float px=rawToX(x),py=rawToY(y);
+                    int target=radial.targetAt(px,py);
+                    // Reach any target with the same continuous gesture.
+                    if(target!=RadialMenuView.NONE && target!=RadialMenuView.HUB){
+                        pointerTarget=target;
+                        radial.select(target);
+                        if(target==RadialMenuView.VOLUME){
+                            draggingVolume=true;
+                            float value=radial.valueAt(py);
+                            radial.setVolumePreview(value);
+                            adjustMedia(value);
                         }
                     }
-                    // Draw the percentage continuously even though Android exposes
-                    // discrete media-volume steps (typically 15-25).
-                    int max=Math.max(1,audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
-                    int gestureRange=Math.max(140,Math.min(600,prefs.getInt("gestureRange",350)));
-                    float progress=Math.max(0f,Math.min(1f,
-                        startFraction-dy/(float)dp(gestureRange)));
-                    int next=Math.round(progress*max);
-                    try {
-                        if(next!=audio.getStreamVolume(AudioManager.STREAM_MUSIC))
-                            audio.setStreamVolume(AudioManager.STREAM_MUSIC,next,0);
-                    }catch(Exception ignored){}
-                    if(bar!=null)bar.setDragFraction(progress);
                 }
                 return true;
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
-                touching=false;
-                if(holdTask!=null)mainHandler.removeCallbacks(holdTask);
-                boolean clickMenu=e.getActionMasked()==MotionEvent.ACTION_UP &&
-                    pressedMenu && !moved && !movingWindow && !swiping &&
-                    e.getY()<=dp(43);
-                pressedMenu=false;
-                if(clickMenu){
-                    toggleVolumePanel();
-                    return true;
+                holding=false;
+                if(radial!=null && menuParams!=null){
+                    float px=rawToX(x),py=rawToY(y);
+                    int target=radial.targetAt(px,py);
+                    if(target==RadialMenuView.NONE||target==RadialMenuView.HUB)target=pointerTarget;
+                    if(e.getActionMasked()==MotionEvent.ACTION_UP){
+                        if(target==RadialMenuView.MUTE)toggleMute();
+                        else if(target==RadialMenuView.ALARM)toggleAlarm();
+                        else if(target==RadialMenuView.VOLUME && !draggingVolume){
+                            float value=radial.valueAt(py);
+                            adjustMedia(value);
+                        }
+                    }
+                    radial.resetVolumePreview();
+                    radial.select(RadialMenuView.NONE);
+                    unlockMenuTouch();
+                    scheduleClose();
                 }
-                if(movingWindow){
-                    float xx=barParams.x/(float)Math.max(1,displayW-barParams.width);
-                    float yy=barParams.y/(float)Math.max(1,maxVertical());
-                    prefs.edit().putString("side","free")
-                        .putFloat("freeX",xx).putFloat("freeY",yy).apply();
-                }
-                if(swiping && bar!=null)bar.animateToSystemLevel();
-                if(swiping||movingWindow)fadeToIdle();
-                // A simple tap is deliberately not a volume action. Android still
-                // consumes it inside the narrow overlay touch region.
+                pointerTarget=RadialMenuView.NONE;
+                draggingVolume=false;
                 return true;
             default:return true;
         }
     }
-    private void onMuteClicked() {
-        muteEngine.toggle();
-        if(muteButton!=null)muteButton.invalidate();
-        showActive();
-        if(bar!=null)bar.animateToSystemLevel();
-        fadeToIdle();
+    private void adjustMedia(float fraction) {
+        if(muteEngine.isMuted())muteEngine.restore();
+        int max=Math.max(1,audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
+        int level=Math.max(0,Math.min(max,Math.round(fraction*max)));
+        try{
+            if(audio.getStreamVolume(AudioManager.STREAM_MUSIC)!=level)
+                audio.setStreamVolume(AudioManager.STREAM_MUSIC,level,0);
+        }catch(Exception ignored){}
+        if(radial!=null)radial.invalidateAudio();
     }
-    @Override public void onSharedPreferenceChanged(SharedPreferences p,String key) {
-        if(bar==null||barParams==null) return;
-        if(key.equals("side")||key.equals("vertical")||key.equals("freeX")||
-            key.equals("freeY")||key.equals("width")||key.equals("height")||
-            key.equals("showMute")||key.equals("edgeDistance")||
-            key.equals("muteSize")||key.equals("muteSpacing")) {
-            barParams.width=dp(prefs.getInt("width",38));
-            barParams.height=dp(prefs.getInt("height",170));
-            computePosition();
-            try{window.updateViewLayout(bar,barParams);}catch(Exception ignored){}
-            syncMuteButton();
-            if(expandedPanel!=null && panelParams!=null) {
-                updatePanelPosition();
-                try{window.updateViewLayout(expandedPanel,panelParams);}
-                catch(Exception ignored){}
+    private void toggleMute(){
+        muteEngine.toggle();
+        if(radial!=null)radial.invalidateAudio();
+        scheduleClose();
+    }
+    private void toggleAlarm(){
+        try {
+            int max=audio.getStreamMaxVolume(AudioManager.STREAM_ALARM);
+            int current=audio.getStreamVolume(AudioManager.STREAM_ALARM);
+            audio.setStreamVolume(AudioManager.STREAM_ALARM,current>0?0:max,0);
+        }catch(Exception blocked){
+            Toast.makeText(this,"O Android restringiu o alarme. Verifique o acesso a Não Perturbe.",
+                Toast.LENGTH_LONG).show();
+        }
+        if(radial!=null)radial.invalidateAudio();
+        scheduleClose();
+    }
+
+    @Override public void onSharedPreferenceChanged(SharedPreferences changed,String key){
+        if(handle==null||handleParams==null)return;
+        if("edgeDistance".equals(key)||"vertical".equals(key)||
+            "side".equals(key)||"freeX".equals(key)||"freeY".equals(key)){
+            setPosition();
+            try{window.updateViewLayout(handle,handleParams);}catch(Exception ignored){}
+            if(radial!=null&&menuParams!=null){
+                placeMenu();
+                try{window.updateViewLayout(radial,menuParams);}catch(Exception ignored){}
             }
         }
-        if(key.equals("idleOpacity") && !swiping && !movingWindow && expandedPanel==null){
-            if(bar!=null)bar.setAlpha(idleAlpha());
-            if(muteButton!=null)muteButton.setAlpha(idleAlpha());
-        }
-        if(bar!=null)bar.refresh();
-        if(muteButton!=null)muteButton.invalidate();
-        if(expandedPanel!=null)expandedPanel.refresh();
+        if("idleOpacity".equals(key)&&radial==null)
+            handle.setAlpha(idleAlpha());
+        if("activeOpacity".equals(key)&&radial!=null)
+            radial.setAlpha(activeAlpha());
+        if(radial!=null)radial.invalidateAudio();
+        if(handle!=null)handle.invalidate();
     }
-    @Override public void onDestroy() {
+    @Override public void onDestroy(){
+        cancelClose();
         if(prefs!=null)prefs.unregisterOnSharedPreferenceChangeListener(this);
-        if(mainHandler!=null){
-            if(holdTask!=null)mainHandler.removeCallbacks(holdTask);
-            if(fadeTask!=null)mainHandler.removeCallbacks(fadeTask);
+        if(radial!=null){
+            try{window.removeView(radial);}catch(Exception ignored){}
+            radial=null;
         }
-        if(expandedPanel!=null){
-            try{window.removeView(expandedPanel);}catch(Exception ignored){}
-            expandedPanel=null;panelParams=null;
+        if(handle!=null){
+            try{window.removeView(handle);}catch(Exception ignored){}
+            handle=null;
         }
-        if(muteButton!=null){
-            try{window.removeView(muteButton);}catch(Exception ignored){}
-            muteButton=null;
-        }
-        if(bar!=null){
-            try{window.removeView(bar);}catch(Exception ignored){}
-            bar=null;
-        }
-        // Never leave alarms or app sound muted when the controller is disabled.
-        if(muteEngine!=null && muteEngine.isMuted())muteEngine.restore();
+        if(muteEngine!=null&&muteEngine.isMuted())muteEngine.restore();
         super.onDestroy();
     }
-    @Override public IBinder onBind(Intent intent){return null;}
+    @Override public IBinder onBind(Intent i){return null;}
+
+    /** Barely visible crescent, not a filled rectangle. */
+    private static final class EdgeHandle extends View {
+        private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF oval=new RectF();
+        private final float scale;
+        EdgeHandle(Service service){
+            super(service);
+            scale=getResources().getDisplayMetrics().density;
+            setLayerType(View.LAYER_TYPE_SOFTWARE,null);
+            setContentDescription("Arraste para abrir o controle de volume");
+        }
+        private float d(float n){return n*scale;}
+        @Override protected void onDraw(Canvas canvas){
+            super.onDraw(canvas);
+            float w=getWidth(),h=getHeight();
+            float centerY=h*.5f;
+            float x=w-d(6);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeWidth(d(5.8f));
+            paint.setColor(Color.argb(145,245,249,253));
+            oval.set(x-d(15),centerY-d(29),x+d(18),centerY+d(29));
+            canvas.drawArc(oval,114,132,false,paint);
+            paint.setStrokeWidth(d(1));
+            paint.setColor(Color.argb(160,255,255,255));
+            oval.inset(d(3),d(2));
+            canvas.drawArc(oval,116,128,false,paint);
+        }
+    }
 }
