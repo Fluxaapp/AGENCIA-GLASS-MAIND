@@ -1,7 +1,7 @@
 name: SlideVol Android APK
 on:
   push:
-    branches: [slidevol-v1-4-work]
+    branches: [slidevol-v1-5-gesture]
   workflow_dispatch:
 permissions:
   contents: write
@@ -24,17 +24,17 @@ jobs:
         working-directory: slidevol
         run: gradle :app:assembleDebug --no-daemon --stacktrace
       - name: Prepare standalone APK
-        run: cp slidevol/app/build/outputs/apk/debug/app-debug.apk SlideVol-1.4.apk
+        run: cp slidevol/app/build/outputs/apk/debug/app-debug.apk SlideVol-1.5.apk
       - name: Publish direct APK download
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view slidevol-v1-4-apk >/dev/null 2>&1; then
-            gh release upload slidevol-v1-4-apk SlideVol-1.4.apk --clobber
+          if gh release view slidevol-v1-5-apk >/dev/null 2>&1; then
+            gh release upload slidevol-v1-5-apk SlideVol-1.5.apk --clobber
           else
-            gh release create slidevol-v1-4-apk SlideVol-1.4.apk --title 'SlideVol v1.4 - Android APK' --notes 'SlideVol 1.4: painel expandido de midia, notificacoes e despertador pelo menu de 3 pontos; novo icone vetorial.' --target "$GITHUB_SHA"
+            gh release create slidevol-v1-5-apk SlideVol-1.5.apk --title 'SlideVol v1.5 - Android APK' --notes 'SlideVol 1.5: controle radial transparente por gesto unico, curva de volume, mute geral, alarme alternavel, icone glass.' --target "$GITHUB_SHA"
           fi
       - uses: actions/upload-artifact@v4
         with:
           name: SlideVol-APK
-          path: SlideVol-1.4.apk
+          path: SlideVol-1.5.apk
