@@ -79,8 +79,8 @@ final class RadialMenuView extends View {
     void setVolumePreview(float f) { visualVolume=sat(f);invalidate(); }
     void resetVolumePreview() { visualVolume=-1;invalidate(); }
     void invalidateAudio() { invalidate(); }
-    void open() { animateTo(1f, 330, null); }
-    void close(Runnable finish) { animatingOut=true;animateTo(0f, 260, finish); }
+    void open() { animateTo(1f, preferences.getInt("openMs",330), null); }
+    void close(Runnable finish) { animatingOut=true;animateTo(0f, preferences.getInt("closeMs",260), finish); }
     private void animateTo(float target,long millis,Runnable finish) {
         if(motion!=null)motion.cancel();
         animatingOut=target==0;
@@ -195,7 +195,7 @@ final class RadialMenuView extends View {
             c.drawPath(segment,p);
             p.setStrokeWidth(dp(19));
             p.setShader(new LinearGradient(0,centerY+dp(94),0,centerY-dp(90),
-                new int[]{Color.WHITE,Color.argb(228,244,252,255),Color.argb(82,244,251,255)},
+                new int[]{preferences.getInt("accentColor",Color.WHITE), Color.argb(228,244,252,255), Color.argb(82,244,251,255)},
                 new float[]{0f,.54f,1f},Shader.TileMode.CLAMP));
             segment.reset();
             measure.getSegment(0,length*trackProgress*currentVolume(),segment,true);
