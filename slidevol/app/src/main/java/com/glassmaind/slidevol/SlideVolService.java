@@ -76,7 +76,7 @@ public class SlideVolService extends Service implements SharedPreferences.OnShar
         PendingIntent stop=PendingIntent.getService(this,2,new Intent(this,SlideVolService.class).setAction(STOP),
             PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
         Notification note=new Notification.Builder(this,"slidevol")
-            .setSmallIcon(android.R.drawable.ic_lock_silent_mode_off)
+            .setSmallIcon(R.drawable.ic_status_slidevol)
             .setContentTitle("SlideVol ativo")
             .setContentText("Arraste a barra na lateral para alterar o volume")
             .setContentIntent(activity)
