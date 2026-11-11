@@ -163,6 +163,7 @@ public class SlideVolService extends Service
                     else scheduleClose();
                 }
             });
+        radial.setMirrored(handleParams.x<=screenW*.5f);
         int flags=WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL |
             WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH;
@@ -316,6 +317,7 @@ public class SlideVolService extends Service
             try{window.updateViewLayout(handle,handleParams);}catch(Exception ignored){}
             if(radial!=null&&menuParams!=null){
                 placeMenu();
+                radial.setMirrored(handleParams.x<=screenW*.5f);
                 try{window.updateViewLayout(radial,menuParams);}catch(Exception ignored){}
             }
         }
